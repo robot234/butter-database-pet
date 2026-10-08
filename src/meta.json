@@ -1,0 +1,23 @@
+{
+  "type": "script",
+  "enabled": false,
+  "name": "黄油·数据库桌宠",
+  "id": "f6af991e-8ec0-4db2-893a-1b31ec337f4b",
+  "info": "v2.0.0：GitHub在线入口，外部加载固定版本黄油Spine4.2模型；摸头持续→收尾、薅脸骨骼拉伸→回弹→3.2秒收尾、身体三连点挠痒、随机待机。模型仅临时覆盖显示，关闭脚本自动恢复数据库原图，不保存黄油图片。兼容旧版图片/大小恢复记录；32～256px大小由数据库保存。每次启动及每30分钟检查更新，也可手动检查；下载或摘要校验失败保留当前运行版。先停用v1旧版，再导入启用此入口。首次需联网。模型归原权利人，Spine运行库适用Spine Runtimes License。",
+  "button": {
+    "enabled": true,
+    "buttons": [
+      { "name": "应用黄油桌宠", "visible": true },
+      { "name": "恢复数据库原图", "visible": true },
+      { "name": "调整桌宠大小", "visible": true },
+      { "name": "检查在线更新", "visible": true }
+    ]
+  },
+  "data": {
+    "runtime_mode": "A: JS-Slash-Runner / D: shujuku external API",
+    "network_required": true,
+    "source": "tenebo/Trickcal-Desktop固定提交的黄油骨骼模型（Normal皮肤），不复制模型入本仓库",
+    "license": "自有适配代码；第三方Spine运行库见许可证；模型授权由原权利人决定",
+    "version": "2.0.0"
+  }
+}

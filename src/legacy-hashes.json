@@ -1,0 +1,86 @@
+{
+  "idle": [
+    "f25d9cd058c3066b22b7c6d0b854149bc64667da74e1df4e03fbb79b04f69a64"
+  ],
+  "blink": [
+    "d893e477979869039839a60834daa1ec61ec6b82b64736fecf489c35d86b9a42"
+  ],
+  "look-left": [
+    "348de3b8ac038803b0f42b54305aba0f0b99b98e4ce10ad91c6f8f08214962ab"
+  ],
+  "look-right": [
+    "f71eb4a919fdc72b6c794a95aa748593b94af8cfca0cf5ef4a9a395779c0c86d"
+  ],
+  "walk-a": [
+    "76d7be777ac1705aa85ff4ffa374a717352e6635bcc2b653d0122671623d4b83"
+  ],
+  "walk-b": [
+    "4c97c74ebf7fb5e075efb2112b06032d030ae2d5e98f2e696c7aae5f5e7e3799"
+  ],
+  "roll": [
+    "d606e700548fa36c8df98e779b3ec7a228bc70d9658b30f1e296139fea56c576"
+  ],
+  "eat-a": [
+    "a2adc41595c7e88e749ee1cf2eba45772b2b0bc4f3fce543b2e680576a756c95"
+  ],
+  "eat-b": [
+    "7a067d9d3f783038e699f583bc58a52b31f6a25b70f42425d736f2c15938bf7a"
+  ],
+  "yawn": [
+    "d893e477979869039839a60834daa1ec61ec6b82b64736fecf489c35d86b9a42"
+  ],
+  "snore": [
+    "d893e477979869039839a60834daa1ec61ec6b82b64736fecf489c35d86b9a42"
+  ],
+  "sit-snore": [
+    "d893e477979869039839a60834daa1ec61ec6b82b64736fecf489c35d86b9a42"
+  ],
+  "working": [
+    "ee468b07be5bb426763e5d7815f7e9f906feeaa0f8a20534802807c0fe09020a"
+  ],
+  "struggle": [
+    "3679eba1821aac0abbfb1e8eb0d499630adba1f7ec717f41d0a07ac7dfbd4815"
+  ],
+  "shy": [
+    "19ea696286fbaaa866c237417774ba5391f263369851a7725354982bf74b4134"
+  ],
+  "tickle": [
+    "c2526921bd40f0826ab9e5231046b2a68b06426845c5583a789179c3f61980c8"
+  ],
+  "angry": [
+    "170bb125d7b8d318d712ba1797c60a5edd5bae7273916da0d83d624f998d2305"
+  ],
+  "happy": [
+    "4c61475458c4d8559d2ab4f3d6b46dfa9a45adb68109b2569ef4c1d15006ccc2"
+  ],
+  "dizzy": [
+    "abdd8c19c6334f74904a8e34be45351f41ef8680e33afc41ec0fa40698a7696a"
+  ],
+  "surprised": [
+    "a28e90104ec35c751a97e501a3d8b6683d3bad5f080f97e00f5386fa9054f740"
+  ],
+  "wave": [
+    "b751712c4bb8ef4e6414530942934f1df42285200946c99d35aff65e3b842cb7"
+  ],
+  "huff": [
+    "76b24fcc1abd7d22a82bca57e71f6f3ec6bd29a3ed1213359c9dbb205adf2615"
+  ],
+  "pound": [
+    "8ddb78b75b231c689949cf0b1cd1e04e94f0fd57e17948d523c742f2144d8e18"
+  ],
+  "knockdown": [
+    "842f4c9920c452a9411409aa1b388b03f35d739d83d14002b1cd1ab4f458d1cc"
+  ],
+  "peek": [
+    "bb3c16ef7d98b2552abaadeb838621b8acdba1563518e632c4623b0cbccca91b",
+    "8341ee2cd87fa2af3b6abfaf0488db3bb18c98890b5991fd4ecbc67bdd54654c"
+  ],
+  "peek-original": [
+    "da3375bea7bda8033dd74329c30fe92696228664c43d68fe1ddac8b9876d12e7",
+    "e206f30b0668561d3025f7d43c534bd13f58cc3c5972c73adc2e772cabd29759"
+  ],
+  "peek-sleepy": [
+    "1e6b2f6ddaead9f20c04fa6d58a8dabd538a16dd41ea4bce7b136a4e277b6aeb",
+    "67653bb07d9365208ddc99f6d2d5d7d10d45969b61a2edb87e9fd24ee4df9ae8"
+  ]
+}

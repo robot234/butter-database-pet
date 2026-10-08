@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": "2.3.2",
-  "path": "releases/2.3.2/runtime.js",
-  "sha256": "779a6f9934fef5b1c03e1faf2f638a01eff3a503f3009af48c55b83d76defdd4"
+  "version": "2.3.3",
+  "path": "releases/2.3.3/runtime.js",
+  "sha256": "e6c929fb0a298023718753ae02a0b6a052d71792e9111370abc10dc8ddb78dfd"
 }

@@ -1,11 +1,16 @@
 // 自有适配代码；模型和官方 Spine 运行库从固定版本的上游加载。
 async function createButterRuntime(env) {
   'use strict';
-  const { host: H, owner, signal, sha256, fetchText, notify, legacyHashes } = env;
-  const VERSION = '2.4.2';
+  const { host: H, owner, signal, sha256, fetchText, fetchAsset, notify, legacyHashes } = env;
+  const VERSION = '2.5.0';
   const MODEL = 'https://raw.githubusercontent.com/tenebo/Trickcal-Desktop/1b7e15bf5d520ac2908f3cf7b7cf226f5aae6907/Assets/spine/butter/';
   const LIB = 'https://cdn.jsdelivr.net/npm/@esotericsoftware/spine-webgl@4.2.109/dist/iife/spine-webgl.js';
   const LIB_HASH = 'ed59374359cf9217a87723124f5e87665492b06dae04a7b5e83af0fd18b12db2';
+  const MODEL_HASHES = {
+    'Butter.skel':'85e440de8537e3498ddf22e18edc7fbd33b8f24579641f9720e0d35b461ddbac',
+    'Butter.atlas':'1f8e468669e5ce3bef3f4c01726415de3e35fd7dd3afd778d2726d0e8b59e716',
+    'Butter.png':'dcf27898edcfdc63f075f603d282cc95582b9d22e2e94ddd7e2a6b667866f126'
+  };
   const doc = H.document;
   let dead = false, active = false, raf = 0, panel = null, root = null, target = null;
   let gesture = null, phase = 'idle', clip = 'Idle_1', elapsed = 0, queue = [], rebounding = null;
@@ -22,7 +27,7 @@ async function createButterRuntime(env) {
   const api = () => H.AutoCardUpdaterAPI?.deskPet;
   css.textContent+='[data-butter-v2-stationary]{transform:var(--butter-v2-fixed-position)!important;transition:none!important}[data-butter-v2-releasing]{transition:transform .65s linear!important}.butter-v2-input-note{position:absolute;bottom:calc(100% + 4px);left:50%;transform:translateX(-50%);width:max-content;max-width:220px;padding:4px 8px;border-radius:8px;background:#fffaf0;color:#49371e;font:12px/1.5 "Microsoft YaHei",sans-serif;box-shadow:0 1px 5px #0002;pointer-events:none}';
   function ensureLive() { if (dead || signal.aborted) throw new DOMException('已停止加载', 'AbortError'); }
-  const libText = await fetchText(LIB, signal);
+  const libText = await fetchText(LIB, signal, LIB_HASH);
   if (await sha256(libText) !== LIB_HASH) throw new Error('Spine 运行库摘要不一致，未执行。');
   ensureLive();
   // 私有命名空间，不覆盖宿主可能已加载的 spine。
@@ -43,6 +48,11 @@ async function createButterRuntime(env) {
   const abortLoad = () => { if (!active) disposeGraphics(); };
   signal.addEventListener('abort', abortLoad, { once: true });
   try {
+    // 新入口把校验后的模型字节从IndexedDB读出；使用Spine官方原始数据入口，不改宿主fetch。
+    if(fetchAsset){
+      const raw=await Promise.all(Object.entries(MODEL_HASHES).map(async([name,hash])=>[name,await fetchAsset(MODEL+name,signal,hash)]));
+      ensureLive();for(const [name,uri]of raw)assets.setRawDataURI(name,uri);
+    }
     const loaded = Promise.all([assets.loadBinaryAsync('Butter.skel'), assets.loadTextureAtlasAsync('Butter.atlas')]);
     let timer;
     const timeout = new Promise((_, reject) => { timer = H.setTimeout(() => reject(new Error('模型加载超时，请重试。')), 30000); });

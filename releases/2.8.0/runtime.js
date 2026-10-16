@@ -1,0 +1,582 @@
+// 自有适配代码；模型和官方 Spine 运行库从固定版本的上游加载。
+async function createButterRuntime(env) {
+  'use strict';
+  const { host: H, owner, signal, sha256, fetchText, fetchAsset, notify, legacyHashes } = env;
+  const VERSION = '2.8.0';
+  const profiles = {
+    butter:{name:'黄油',file:'Butter',hashes:{'Butter.skel':'85e440de8537e3498ddf22e18edc7fbd33b8f24579641f9720e0d35b461ddbac','Butter.atlas':'1f8e468669e5ce3bef3f4c01726415de3e35fd7dd3afd778d2726d0e8b59e716','Butter.png':'dcf27898edcfdc63f075f603d282cc95582b9d22e2e94ddd7e2a6b667866f126'}},
+    kommy:{name:'柯米',file:'Kommy',hashes:{'Kommy.skel':'c4c6905b80178a1ad6c5829ed7b1e1b730468d85804a00b5a51305b3828a315c','Kommy.atlas':'4cc2a2993d2a7f57788a54b48bfb05d72d5e048f997337a5077d0480b5a9800f','Kommy.png':'8a4e1fa41483ece760a971ea6ba09d1c7489dea7c5e516eb4af5b07bfe49f409'}},
+    youngchun:{name:'咏春',file:'Youngchun',model:'https://raw.githubusercontent.com/robot234/butter-database-pet/6f9c1afab0390814573e8d74c2d923452d355561/assets/youngchun/',hashes:{'Youngchun.skel.bytes':'44572de1172872fda71178bd8b2b8951a4ede21060e48a64622234ee100fb944','Youngchun.atlas.txt':'bf5f605e8e056af0ad6e7cad632ea01526631f4e2e259dcd9885bb44f37eec7e','Youngchun.png':'f1072f5cac73bafcdfac32c8937bc89b9e62b3468e2dbade684688489ac9bd6a'}}
+  };
+  const character = env.character || 'butter', profile = Object.hasOwn(profiles,character) && profiles[character];
+  if(!profile)throw new Error('不支持的桌宠角色：'+character);
+  const kommy = character === 'kommy', youngchun = character === 'youngchun', characterName = profile.name;
+  const MODEL = profile.model || 'https://raw.githubusercontent.com/tenebo/Trickcal-Desktop/1b7e15bf5d520ac2908f3cf7b7cf226f5aae6907/Assets/spine/'+character+'/';
+  const LIB = 'https://cdn.jsdelivr.net/npm/@esotericsoftware/spine-webgl@'+(youngchun?'4.1.56':'4.2.109')+'/dist/iife/spine-webgl.js';
+  const LIB_HASH = youngchun ? 'bee9d7dbc36cb5c37f1f999e4b68e7f735ffd09c4b4ca667ae50fc7d4429aeff' : 'ed59374359cf9217a87723124f5e87665492b06dae04a7b5e83af0fd18b12db2';
+  const MODEL_HASHES = profile.hashes;
+  const doc = H.document;
+  let dead = false, active = false, raf = 0, panel = null, characterPanel = null, root = null, target = null;
+  let gesture = null, phase = 'idle', clip = 'Idle_1', elapsed = 0, queue = [], rebounding = null;
+  let pose = '', mode = '', task = '', focused = true, lastFrame = 0, lastRandom = '', nextRandom = 0;
+  const history = [], disposers = [];
+  let hitAreas = null, interaction = '', tapIndex = 0, knockCount = 0, lastKnock = 0, forwarding = false;
+  let walkDistance = 0, walkX = null, walking = false, feet, footPose=[];
+  let hoverPoint=null;
+  let observedTask='',taskHold=null,selectedTaskClip='';
+  let queuedPointer=null,pendingAction=null,inputNote=null,inputNoteTimer=0;
+  let motionSnapshot=null,motionSource=null,motionReadAt=0;
+  const canvas = doc.createElement('canvas'); canvas.className = 'butter-v2-canvas'; canvas.setAttribute('aria-hidden', 'true');
+  const css = doc.createElement('style');
+  css.textContent = '[data-butter-v2-mounted] .acu-desk-pet__img,[data-butter-v2-mounted]>.acu-desk-pet__peek-img{visibility:hidden!important}.acu-desk-pet__body[data-butter-v2-mounted]{animation:none!important}.butter-v2-canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}.butter-v2-panel{position:fixed;inset:64px 12px auto auto;margin:0;padding:18px;width:330px;max-width:calc(100vw - 24px);z-index:9500;border:1px solid #bd9452;border-radius:12px;background:#fffaf0;color:#49371e;font:14px/1.6 "Microsoft YaHei",sans-serif}.butter-v2-panel label{display:block;margin:12px 0}.butter-v2-panel input[type=range]{width:220px}.butter-v2-panel button{margin:8px 8px 0 0}';
+  const api = () => H.AutoCardUpdaterAPI?.deskPet;
+  css.textContent+='[data-butter-v2-stationary]{transform:var(--butter-v2-fixed-position)!important;transition:none!important}[data-butter-v2-releasing]{transition:transform .65s linear!important}.butter-v2-input-note{position:absolute;bottom:calc(100% + 4px);left:50%;transform:translateX(-50%);width:max-content;max-width:220px;padding:4px 8px;border-radius:8px;background:#fffaf0;color:#49371e;font:12px/1.5 "Microsoft YaHei",sans-serif;box-shadow:0 1px 5px #0002;pointer-events:none}';
+  function ensureLive() { if (dead || signal.aborted) throw new DOMException('已停止加载', 'AbortError'); }
+  const libText = await fetchText(LIB, signal, LIB_HASH);
+  if (await sha256(libText) !== LIB_HASH) throw new Error('Spine 运行库摘要不一致，未执行。');
+  ensureLive();
+  // 私有命名空间，不覆盖宿主可能已加载的 spine。
+  const S = owner.Function(libText + '\nreturn spine;')();
+  const context = new S.ManagedWebGLRenderingContext(canvas, { alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: true });
+  const renderer = new S.SceneRenderer(canvas, context);
+  const assets = new S.AssetManager(context, MODEL);
+  let skeleton, state, data, base, head, controls, viewBounds, poseBounds;
+  function updateWorld(poseOnly=false) {
+    if(youngchun)skeleton.updateWorldTransform();
+    else skeleton.updateWorldTransform(poseOnly?S.Physics.pose:S.Physics.update);
+  }
+  function selectedBounds(pattern) {
+    const hidden = [];
+    for (const slot of skeleton.slots) if (slot.attachment && !pattern.test(slot.data.name)) { hidden.push([slot,slot.attachment]); slot.attachment=null; }
+    try { return skeleton.getBoundsRect(); }
+    finally { for (const [slot,attachment] of hidden) slot.attachment=attachment; }
+  }
+  function disposeGraphics() {
+    for (const dispose of [()=>assets.dispose(),()=>renderer.dispose(),()=>context.gl.getExtension('WEBGL_lose_context')?.loseContext()]) try { dispose(); } catch (_) {}
+  }
+  const abortLoad = () => { if (!active) disposeGraphics(); };
+  signal.addEventListener('abort', abortLoad, { once: true });
+  try {
+    // 新入口把校验后的模型字节从IndexedDB读出；使用Spine官方原始数据入口，不改宿主fetch。
+    if(fetchAsset){
+      const raw=await Promise.all(Object.entries(MODEL_HASHES).map(async([name,hash])=>[name,await fetchAsset(MODEL+name,signal,hash)]));
+      ensureLive();for(const [name,uri]of raw)assets.setRawDataURI(name,uri);
+    }
+    const loaded = youngchun ? Promise.all([
+      new Promise((resolve,reject)=>assets.loadBinary(profile.file+'.skel.bytes',(_path,value)=>resolve(value),(_path,message)=>reject(new Error(message)))),
+      new Promise((resolve,reject)=>assets.loadTextureAtlas(profile.file+'.atlas.txt',(_path,value)=>resolve(value),(_path,message)=>reject(new Error(message))))
+    ]) : Promise.all([assets.loadBinaryAsync(profile.file+'.skel'), assets.loadTextureAtlasAsync(profile.file+'.atlas')]);
+    let timer;
+    const timeout = new Promise((_, reject) => { timer = H.setTimeout(() => reject(new Error('模型加载超时，请重试。')), 30000); });
+    const cancelled = new Promise((_, reject) => signal.addEventListener('abort', () => reject(new DOMException('已停止加载', 'AbortError')), { once: true }));
+    let binary, atlas;
+    try { [binary, atlas] = await Promise.race([loaded, timeout, cancelled]); } finally { H.clearTimeout(timer); }
+    ensureLive();
+    data = new S.SkeletonBinary(new S.AtlasAttachmentLoader(atlas)).readSkeletonData(binary);
+    skeleton = new S.Skeleton(data); skeleton.setSkinByName('Normal'); skeleton.setSlotsToSetupPose();
+    state = new S.AnimationState(new S.AnimationStateData(data)); state.data.defaultMix = 0.12;
+    for (const name of ['Idle_1','Pat_Idle','Pat_End','Touch_Idle','Touch_End','Tickle_Idle_1','Tickle_Idle_2','Tickle_End',...(youngchun?['Count_1','Panic_1','Victory_1']:kommy?['Tired_1','Scream_1','Melong_1','Sleepy_1']:['Proud_1','Dizzy_1','Taunt_1'])]) {
+      if (!data.findAnimation(name)) throw new Error('模型缺少动作：' + name);
+    }
+    for (const name of ['Character_Ball_Move','Character_Pat']) if (!skeleton.findBone(name)) throw new Error('模型缺少互动骨骼：' + name);
+    controls = ['Character_Ball_Move','Character_Pat'].map(name=>skeleton.findBone(name));
+    feet = (youngchun?['Leg_R_Down_0','Leg_L_Down_0']:['S1_Leg_IK_R','S1_Leg_IK_L']).map(name=>skeleton.findBone(name));
+    if (feet.some(b=>!b)) throw new Error('模型缺少迈步控制骨骼。');
+    state.setAnimation(0, 'Idle_1', true); state.apply(skeleton); updateWorld();
+    base = skeleton.getBoundsRect();
+  } catch (error) { signal.removeEventListener('abort', abortLoad); disposeGraphics(); throw error; }
+  const hashCache = new Map();
+  async function migrateLegacy() {
+    const pet = api(); if (!pet?.getAppearance || !pet.updateAppearance) throw new Error('数据库桌宠外观接口不可用。');
+    const imageKey = 'butter-database-pet:original-images:v1', sizeKey = 'butter-database-pet:original-size:v1';
+    const imageRaw = H.localStorage.getItem(imageKey), sizeRaw = H.localStorage.getItem(sizeKey);
+    const parse = raw => { try { return raw ? JSON.parse(raw) : null; } catch (_) { throw new Error('旧版恢复记录损坏，请先用旧版恢复。'); } };
+    const images = parse(imageRaw), sizes = parse(sizeRaw), current = pet.getAppearance(), patch = {};
+    if (images) {
+      if (images.version !== 1 || !images.images || Object.keys(legacyHashes).some(k => images.images[k] !== null && typeof images.images[k] !== 'string')) throw new Error('旧版图片恢复记录不兼容。');
+      const restore = {};
+      for (const [key, hashes] of Object.entries(legacyHashes)) {
+        const url = current.images[key];
+        if (typeof url !== 'string') continue;
+        if (!hashCache.has(url)) hashCache.set(url, await sha256(url));
+        if (hashes.includes(hashCache.get(url))) restore[key] = images.images[key];
+      }
+      if (Object.keys(restore).length) patch.images = restore;
+    }
+    if (sizes) {
+      const valid = n => Number.isInteger(n) && n >= 32 && n <= 256;
+      if (sizes.version !== 1 || !sizes.last || !sizes.pending || !sizes.overrides || !sizes.before || ['wide','narrow'].some(k => !valid(sizes.before[k]) || (sizes.overrides[k] !== null && !valid(sizes.overrides[k])) || (k in sizes.last && !valid(sizes.last[k])) || (k in sizes.pending && !valid(sizes.pending[k])))) throw new Error('旧版大小恢复记录不兼容。');
+      const restore = {};
+      for (const k of ['wide','narrow']) if (current.size[k] === sizes.last[k] || current.size[k] === sizes.pending[k]) restore[k] = sizes.overrides[k];
+      if (Object.keys(restore).length) patch.size = restore;
+    }
+    ensureLive();
+    if (Object.keys(patch).length) await pet.updateAppearance(patch);
+    if (imageRaw) H.localStorage.removeItem(imageKey);
+    if (sizeRaw) H.localStorage.removeItem(sizeKey);
+  }
+  function play(name, loop = false, kind = 'native') {
+    if (!data.findAnimation(name)) name = 'Idle_1';
+    if(kind==='result'&&/^(Taunt|Melong)_/.test(name))loop=true;
+    skeleton.setBonesToSetupPose(); state.setAnimation(0, name, loop);
+    clip = name; phase = kind; elapsed = 0;
+    history.push(name); if (history.length > 80) history.shift();
+  }
+  function readMotion(now=H.performance.now()) {
+    const pet=api();
+    if(pet!==motionSource||!motionSnapshot||now>=motionReadAt){
+      const before=motionSnapshot,next=pet?.getAppearance().motion;
+      motionSource=pet;motionSnapshot=next;motionReadAt=now+250;
+      // 数据库设置仍可实时修改；时间间隔或动作开关变更后重新排待机，而非沿用旧倒计时。
+      if(before&&next&&(before.idleActionMinMs!==next.idleActionMinMs||before.idleActionSpreadMs!==next.idleActionSpreadMs||before.enabled!==next.enabled))nextRandom=now+(next.idleActionMinMs??15000)+Math.random()*(next.idleActionSpreadMs??5000);
+    }
+    return motionSnapshot;
+  }
+  function planRandom() {
+    const now=H.performance.now(),m=readMotion(now);
+    nextRandom = now + (m?.idleActionMinMs ?? 15000) + Math.random() * (m?.idleActionSpreadMs ?? 5000);
+  }
+  function rest() { unlockMotion(root);queue = []; rebounding = null; mode = ''; interaction = ''; play('Idle_1', true, 'idle'); planRandom(); }
+  function sequence(names) { queue = names.slice(1); play(names[0], false, 'result'); }
+  const randomClips = (youngchun?['Idle_2','Idle_3','Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Happy_7','Curious_1','Curious_2','Smile_1_1','Smile_2','Smile_3','Innocent_1','Rest_1','Rest_2','Tired_1','Eat_1','Eat_2']:kommy?['Idle_2','Taunt_1','Melong_1','Melong_2','Melong_3','Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Happy_7','Sleepy_1','Tired_1','Tired_2','Tired_3','Eat_1','Eat_2']:['Smell_1','Taunt_1','Taunt_2','Taunt_3','Taunt_4','Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Proud_1','Proud_2','Eat_1','Eat_2']).filter(name=>data.findAnimation(name));
+  const poses = { idle:'Idle_1', blink:'Close_1','look-left':'Serious_1','look-right':'Serious_2','walk-a':'Idle_1','walk-b':'Idle_1',roll:'Dizzy_1','eat-a':'Eat_1','eat-b':'Eat_2',yawn:'Close_1',snore:'Close_1','sit-snore':'Close_1',working:'Proud_1',struggle:'Panic_1',shy:'Panic_2',angry:'Angry_1',happy:'Happy_1',dizzy:'Dizzy_1',surprised:'Surprise_1',wave:'Happy_3',huff:'Angry_2',pound:'Smash_End_1',knockdown:'Smash_End_2' };
+  if(kommy)Object.assign(poses,{'look-left':'Sleepy_1','look-right':'Tired_1',roll:'Tired_2',yawn:'Sleepy_1',snore:'Sleepy_1','sit-snore':'Sleepy_1',working:'Tired_1',struggle:'Scream_1',shy:'Surprise_2',dizzy:'Tired_3'});
+  if(youngchun)Object.assign(poses,{roll:'Tired_1',yawn:'Tired_1',working:'Count_1',struggle:'Panic_1',dizzy:'Panic_2'});
+  const variants=new Map();
+  function chooseVariant(group,names) { const available=names.filter(name=>data.findAnimation(name)),index=variants.get(group)||0;variants.set(group,index+1);return available[index%available.length]||'Idle_1'; }
+  const taskClips = youngchun?{working:['Count_1','Count_2','Robot_1'],error:['Panic_1','Sad_1','Sad_2'],success:['Victory_1','Happy_1','Happy_2']}:kommy?{working:['Tired_1','Tired_2','Tired_3'],error:['Scream_1','Surprise_3'],success:['Melong_1','Melong_2','Melong_3']}:{working:['Proud_1','Proud_2'],error:['Dizzy_1','Dizzy_2'],success:['Taunt_1','Taunt_3','Taunt_4']};
+  const faceClips=youngchun?['Surprise_1','Surprise_2','Panic_1','Panic_2','Curious_1','Innocent_1','Sulky_1']:kommy?['Surprise_1','Surprise_2','Surprise_3','Taunt_1','Melong_1','Melong_2','Melong_3']:['Panic_2','Surprise_1','Panic_3','Taunt_2','Taunt_1','Taunt_3','Taunt_4'];
+  function nativeClip(p) {
+    const groups={happy:['Happy_1','Happy_2','Happy_3','Happy_4','Happy_5'],wave:['Happy_1','Happy_2','Happy_3','Happy_4','Happy_5'],angry:['Angry_1','Angry_2','Angry_3'],shy:['Panic_2','Panic_3'],roll:['Dizzy_1','Dizzy_2'],dizzy:['Dizzy_1','Dizzy_2']};
+    if(kommy)Object.assign(groups,{happy:['Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Happy_7'],wave:['Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Happy_7'],angry:['Angry_1','Angry_2','Angry_3','Angry_4','Angry_5'],shy:['Surprise_2','Surprise_3'],roll:['Tired_1','Tired_2','Tired_3'],dizzy:['Tired_1','Tired_2','Tired_3']});
+    if(youngchun)Object.assign(groups,{happy:['Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Happy_7'],angry:['Angry_1','Angry_2','Angry_3','Angry_4','Angry_5','Angry_6','Angry_7','Angry_8','Angry_9'],roll:['Tired_1','Tired_2'],dizzy:['Panic_1','Panic_2']});
+    return groups[p]?chooseVariant('native:'+p,groups[p]):poses[p]||'Idle_1';
+  }
+  const displayDuration=name=>Math.max(data.findAnimation(name).duration,/^(Taunt|Melong)_/.test(name)?3:0);
+  function taskState(p) {
+    if (p === 'working') return 'working';
+    // 原生拖动把working姿势临时改成struggle；保留本次工作表情，松手后重读真实任务状态。
+    if (root?.classList.contains('is-dragging')) return observedTask==='working'?'working':'';
+    const bubble = root?.closest('.acu-desk-pet-layer')?.querySelector('.acu-notice-bubble') || doc.querySelector('.acu-notice-bubble');
+    if (bubble?.classList.contains('acu-notice-bubble--error')) return 'error';
+    if (bubble?.classList.contains('acu-notice-bubble--success')) return 'success';
+    return '';
+  }
+  function displayedTask(p,peek,now) {
+    const raw=peek?'':taskState(p);
+    if(raw!==observedTask){
+      observedTask=raw;
+      if(raw){selectedTaskClip=chooseVariant('task:'+raw,taskClips[raw]);taskHold=raw==='working'?null:{kind:raw,clip:selectedTaskClip,until:0};}
+    }
+    if(!focused||doc.hidden||peek||root?.classList.contains('is-dragging'))taskHold=null;
+    if(raw)return raw;
+    if(taskHold&&(taskHold.until===0||now<taskHold.until)){selectedTaskClip=taskHold.clip;return taskHold.kind;}
+    taskHold=null;return '';
+  }
+  function unmount() { target?.removeAttribute('data-butter-v2-mounted'); target = null; canvas.remove(); }
+  function clearMotionRelease(node,takeover=false) {
+    const saved=node?.__butterMotionRelease;if(!saved||!takeover&&saved.owner!==controller)return;
+    H.clearTimeout(saved.timer);saved.observer?.disconnect();if(saved.attribute===null)node.removeAttribute('data-butter-v2-releasing');else node.setAttribute('data-butter-v2-releasing',saved.attribute);delete node.__butterMotionRelease;
+  }
+  function motionGap(node) {try{const visible=new H.DOMMatrix(H.getComputedStyle(node).transform),native=new H.DOMMatrix(node.style.transform||'none');return {x:visible.m41-native.m41,y:visible.m42-native.m42};}catch(_){return null;}}
+  function unlockMotion(node,immediate=false) {
+    const saved=node?.__butterMotionLock;if(!saved||saved.owner!==controller)return;
+    const gap=motionGap(node);
+    if(!immediate&&!dead&&node.isConnected&&(!gap||Math.hypot(gap.x,gap.y)>1)){
+      clearMotionRelease(node,true);
+      const release=node.__butterMotionRelease={owner:controller,attribute:node.getAttribute('data-butter-v2-releasing'),timer:0,transform:node.style.transform};
+      // 先让浏览器提交当前固定位置，再撤销固定；过渡不依赖原生is-animated或strollMs。
+      node.getBoundingClientRect();node.setAttribute('data-butter-v2-releasing','');
+      const finishLater=()=>{H.clearTimeout(release.timer);release.timer=H.setTimeout(()=>clearMotionRelease(node),700);};
+      release.observer=new H.MutationObserver(()=>{if(node.style.transform!==release.transform){release.transform=node.style.transform;finishLater();}});release.observer.observe(node,{attributes:true,attributeFilter:['style']});finishLater();
+    }
+    if(saved.value)node.style.setProperty('--butter-v2-fixed-position',saved.value,saved.priority);else node.style.removeProperty('--butter-v2-fixed-position');
+    if(saved.attribute===null)node.removeAttribute('data-butter-v2-stationary');else node.setAttribute('data-butter-v2-stationary',saved.attribute);
+    delete node.__butterMotionLock;
+  }
+  function freezeMotion() {
+    if(!root)return;
+    let saved=root.__butterMotionLock;
+    if(!saved){const position=H.getComputedStyle(root).transform;clearMotionRelease(root,true);saved=root.__butterMotionLock={owner:controller,mirror:canvas.style.transform,value:root.style.getPropertyValue('--butter-v2-fixed-position'),priority:root.style.getPropertyPriority('--butter-v2-fixed-position'),attribute:root.getAttribute('data-butter-v2-stationary')};root.style.setProperty('--butter-v2-fixed-position',position);root.setAttribute('data-butter-v2-stationary','');}
+    saved.owner=controller;
+  }
+  function clearInputNote() {H.clearTimeout(inputNoteTimer);inputNoteTimer=0;inputNote?.remove();inputNote=null;}
+  function showInputNote(text,persistent=false) {
+    clearInputNote();if(!root)return;inputNote=doc.createElement('div');inputNote.className='butter-v2-input-note';inputNote.setAttribute('role','status');inputNote.setAttribute('aria-live','polite');inputNote.textContent=text;root.append(inputNote);
+    if(!persistent)inputNoteTimer=H.setTimeout(clearInputNote,1400);
+  }
+  function clearQueuedInput() {queuedPointer=null;pendingAction=null;clearInputNote();}
+  function protectedInput() {return ['result','finishing','rebound'].includes(phase)||task==='working'||taskState(nativePose())==='working'||phase==='task'&&elapsed<3;}
+  function newGesture(e,kind) {return {id:e.pointerId,kind,x:e.clientX,y:e.clientY,dx:0,dy:0,stroke:0,since:H.performance.now(),started:false,width:root.getBoundingClientRect().width,pointerType:e.pointerType};}
+  const nativeDragIntent=g=>Math.hypot(g.dx,g.dy)*g.width>8&&Math.abs(g.dx)>=g.stroke*.65;
+  function primeNativeDrag(init) {
+    if(root?.__butterMotionRelease?.owner!==controller)return false;
+    const gap=motionGap(root);
+    if(!gap||Math.hypot(gap.x,gap.y)<=6){clearMotionRelease(root);return false;}
+    // 用户主动拖动时，用原组件的拖动流程把内部起点对齐到当前可见位置，避免沿用后台旧起点。
+    // 只在确有位置差且用户已经按下时执行；后续移动和最终保存仍由原组件负责。
+    const previous=forwarding;forwarding=true;
+    try{
+      root.dispatchEvent(new H.PointerEvent('pointerdown',init));
+      root.dispatchEvent(new H.PointerEvent('pointermove',{...init,clientX:init.clientX+gap.x,clientY:init.clientY+gap.y,buttons:1}));
+      root.dispatchEvent(new H.PointerEvent('pointerup',{...init,buttons:0}));
+      root.dispatchEvent(new H.PointerEvent('pointerdown',init));
+      clearMotionRelease(root);return true;
+    }finally{forwarding=previous;}
+  }
+  function startQueuedInput(now) {
+    if(!pendingAction||protectedInput()||gesture||!focused||doc.hidden||!target||target.classList.contains('acu-desk-pet__peek')||root.classList.contains('is-dragging'))return;
+    const g=pendingAction;pendingAction=null;queuedPointer=null;clearInputNote();rest();if(!observedTask)taskHold=null;gesture=g;phase='pressed';freezeMotion();
+    g.started=(g.ended?g.ended-g.since:now-g.since)>=550||(g.kind==='belly'?g.stroke>.08&&Math.abs(g.dx)<g.stroke*.65:Math.hypot(g.dx,g.dy)>.035);
+    if(g.ended&&g.kind==='belly'){gesture=null;interaction='belly';sequence(['Tickle_Idle_1','Tickle_Idle_2','Tickle_End']);}
+    else {if(g.started)held(g.kind);if(g.ended)release();}
+  }
+  function restoreHint(node) {
+    const saved=node?.__butterPetHint;if(!saved||saved.owner!==controller)return;
+    for(const name of ['title','aria-label'])if(node.getAttribute(name)===saved.applied[name]){const value=saved.before[name];if(value===null)node.removeAttribute(name);else node.setAttribute(name,value);}
+    delete node.__butterPetHint;
+  }
+  function updateHint(peek,p) {
+    const states=youngchun?{working:'正在执行任务：数数或机器人',error:'任务失败：慌张或难过',success:'任务成功：胜利或开心'}:kommy?{working:'正在执行任务：困困',error:'任务失败：惊叫或惊讶',success:'任务成功：吐舌头'}:{working:'正在执行任务：得意',error:'任务失败：晕晕',success:'任务成功：吐舌头'};
+    let text=peek?characterName+'：躲在边上偷看（悬停或点击唤出）':phase==='task'&&states[task]?characterName+'：'+states[task]+(task==='working'?'（拖动腿部/外围或拖动肚子可移动；互动点击等任务结束后接播）':''):'';
+    if(!text){
+      const labels={Pat:'摸头',Touch:phase==='rebound'?'薅脸回弹':'薅脸',Sad:'哭哭',Tickle:'挠痒',Smash:'敲头',Happy:'高兴',Angry:'生气',Proud:'得意',Dizzy:'晕晕',Taunt:kommy?'调皮':'吐舌头',Melong:'吐舌头',Tired:'困困',Sleepy:'打瞌睡',Scream:'惊叫',Eat:'嚼嚼',Smell:'嗅嗅',Panic:'小反应',Surprise:'惊讶',Close:'闭眼',Serious:'张望',Count:'数数',Robot:'机器人',Victory:'胜利',Curious:'好奇',Smile:'微笑',Innocent:'无辜',Sulky:'鼓脸',Rest:'休息'};
+      const reactions={Touch_End:'哭哭',Panic_2:'尴尬',Panic_3:'尴尬',Surprise_1:'惊讶',Taunt_2:'歪头'};
+      const state=walking?'散步':['snore','sit-snore'].includes(p)?'睡觉':reactions[clip]||labels[clip.split('_')[0]]||'待机';
+      const inside=hoverPoint&&root.getBoundingClientRect();
+      const kind=inside&&hoverPoint.clientX>=inside.left&&hoverPoint.clientX<=inside.right&&hoverPoint.clientY>=inside.top&&hoverPoint.clientY<=inside.bottom?hitKind(hoverPoint):'';
+      const tips={pat:'短点敲头；长按或滑动摸头，松手收尾',face:'短点轮换'+faceClips.length+'种反应；'+(youngchun?'':'吐舌头至少3秒；')+'长按或拖动薅脸，松手回弹后哭哭',belly:'单击挠痒；长按或轻揉持续挠痒，松手收尾；单向拖动可移动'};
+      text=characterName+'：'+state+'（'+(['finishing','rebound','result'].includes(phase)&&interaction!=='tap'?'互动收尾播放中':tips[kind]||'头顶摸头或敲头，脸部薅脸，肚子挠痒；拖动腿部或外围移动')+'）';
+    }
+    if(pendingAction)text+='；已收到下一次'+({pat:'头顶互动',face:'脸部互动',belly:'挠痒'}[pendingAction.kind]);
+    let saved=root.__butterPetHint;
+    if(!saved)saved=root.__butterPetHint={owner:controller,before:{},applied:{}};
+    saved.owner=controller;
+    for(const name of ['title','aria-label']){const value=root.getAttribute(name);if(value!==saved.applied[name])saved.before[name]=value;if(value!==text)root.setAttribute(name,text);saved.applied[name]=text;}
+  }
+  function attach() {
+    const nextRoot = doc.querySelector('.acu-desk-pet');
+    if (root !== nextRoot) { restoreHint(root);unlockMotion(root,true);clearMotionRelease(root);clearQueuedInput();hoverPoint=null;gesture = null; rest();taskHold=null;observedTask=''; root = nextRoot; pose = ''; unmount(); }
+    const next = root?.querySelector('.acu-desk-pet__peek') || root?.querySelector('.acu-desk-pet__body');
+    if (target !== next) { unmount(); target = next; if (target) target.append(canvas); }
+    if (target && !target.hasAttribute('data-butter-v2-mounted')) target.setAttribute('data-butter-v2-mounted','');
+    return !!target && root.getBoundingClientRect().width > 0 && H.getComputedStyle(root).visibility !== 'hidden';
+  }
+  function nativePose() { return root?.querySelector('.acu-desk-pet__img')?.className.match(/\bpose-([\w-]+)/)?.[1] || 'idle'; }
+  function held(kind) {
+    interaction = kind;
+    play(kind === 'pat' ? 'Pat_Idle' : kind === 'belly' ? 'Tickle_Idle_1' : 'Touch_Idle', true, 'holding');
+  }
+  function knock() {
+    const now = H.performance.now(); knockCount = now-lastKnock < 1800 ? knockCount+1 : 1; lastKnock = now;
+    if (interaction === 'knock' && phase === 'result') {
+      if (knockCount >= 3 && !queue.includes('Angry_1') && !clip.startsWith('Angry_')) queue.push('Angry_1','Angry_2','Angry_3');
+      return;
+    }
+    interaction = 'knock'; sequence(['Smash_End_1','Smash_End_2']);
+  }
+  function release(cancelled = false) {
+    if (!gesture) return;
+    const g = gesture; gesture = null;
+    if (g.started) {
+      if (g.kind === 'face') { phase = 'rebound'; elapsed = 0; rebounding = { dx: g.dx, dy: g.dy }; }
+      else if (g.kind === 'belly') {
+        interaction = 'belly'; sequence(clip === 'Tickle_Idle_1' ? ['Tickle_Idle_2','Tickle_End'] : ['Tickle_End']);
+      } else {
+        // 松手先完成持续段本轮，再进入模型结果段。
+        const entry = state.getCurrent(0); entry.loop = false; entry.trackTime %= entry.animation.duration;
+        elapsed = entry.trackTime; phase = 'finishing'; queue = ['Pat_End'];
+        const duration = (g.ended||H.performance.now())-g.since;
+        if (duration >= 4500) queue.push('Happy_3','Happy_4','Happy_5');
+        else if (duration >= 1800 || g.stroke >= .65) queue.push('Happy_1','Happy_2');
+      }
+    } else if (!cancelled) {
+      if (g.kind === 'pat') knock();
+      else if (g.kind === 'belly') { interaction = 'belly'; sequence(['Tickle_Idle_1','Tickle_Idle_2','Tickle_End']); }
+      else { interaction = 'tap'; sequence([faceClips[tapIndex++ % faceClips.length]]); }
+    }
+    else rest();
+  }
+  function hitKind(e) {
+    if (!hitAreas || !viewBounds) return '';
+    const r=canvas.getBoundingClientRect();
+    let nx=(e.clientX-r.x)/r.width; if (canvas.style.transform) nx=1-nx;
+    const point={x:viewBounds.x+nx*viewBounds.width,y:viewBounds.y+(1-(e.clientY-r.y)/r.height)*viewBounds.height};
+    for (const kind of ['pat','face','belly']) {
+      const b=hitAreas[kind];
+      if (point.x>=b.x && point.x<=b.x+b.width && point.y>=b.y && point.y<=b.y+b.height) return kind;
+    }
+    return '';
+  }
+  function down(e) {
+    if (forwarding || !active || e.button !== 0 || e.isPrimary === false || !root?.contains(e.target) || target?.classList.contains('acu-desk-pet__peek')) return;
+    // 原生睡眠需要收到真实pointerdown/up才能唤醒；没有正在收尾时交回原组件。
+    if(['snore','sit-snore'].includes(nativePose())&&!protectedInput())return;
+    const kind = hitKind(e);
+    const working=task==='working'||taskState(nativePose())==='working';
+    // 工作只延后模型互动；腿部/外围的真实拖动仍交回数据库。
+    if(working&&!kind){
+      unlockMotion(root);
+      if(primeNativeDrag({bubbles:true,cancelable:true,pointerId:e.pointerId,pointerType:e.pointerType,isPrimary:true,button:0,buttons:1,clientX:e.clientX,clientY:e.clientY})){e.preventDefault();e.stopImmediatePropagation();}
+      return;
+    }
+    if (protectedInput()) {
+      if (phase === 'result' && interaction === 'tap' && kind === 'face') rest();
+      else {
+        e.stopImmediatePropagation();e.preventDefault();
+        if(kind==='pat'&&interaction==='knock'&&H.performance.now()-lastKnock<1800){knock();showInputNote('连敲已收到');return;}
+        if(kind){queuedPointer=newGesture(e,kind);pendingAction=queuedPointer;showInputNote('已收到，下一步：'+({pat:'头顶互动',face:'脸部互动',belly:'挠痒'}[kind]),true);try{root.setPointerCapture(e.pointerId);}catch(_){}}
+        else showInputNote('这一段播完就能拖动啦');
+        return;
+      }
+    }
+    if (!kind) { if (phase === 'random') rest();if(primeNativeDrag({bubbles:true,cancelable:true,pointerId:e.pointerId,pointerType:e.pointerType,isPrimary:true,button:0,buttons:1,clientX:e.clientX,clientY:e.clientY})){e.preventDefault();e.stopImmediatePropagation();}return; }
+    e.preventDefault(); e.stopImmediatePropagation(); rest();
+    if(!observedTask)taskHold=null;
+    clearQueuedInput();gesture = newGesture(e,kind);
+    try { root.setPointerCapture(e.pointerId); } catch (_) {}
+    phase = 'pressed';freezeMotion();
+  }
+  function forwardNativeDrag(g,e) {
+    gesture=null;rest();const previous=forwarding;forwarding=true;
+    try {
+      const init={bubbles:true,cancelable:true,pointerId:g.id,pointerType:g.pointerType,isPrimary:true,button:0,buttons:1};
+      const start={...init,clientX:g.x,clientY:g.y};if(!primeNativeDrag(start))root.dispatchEvent(new H.PointerEvent('pointerdown',start));
+      root.dispatchEvent(new H.PointerEvent('pointermove',{...init,clientX:e.clientX,clientY:e.clientY}));
+    } finally { forwarding=previous; }
+  }
+  function move(e) {
+    if(e.pointerType!=='touch')hoverPoint=root?.contains(e.target)?{clientX:e.clientX,clientY:e.clientY}:null;
+    if (forwarding) return;
+    if(queuedPointer?.id===e.pointerId){
+      e.preventDefault();e.stopImmediatePropagation();const g=queuedPointer,old=g.dx;g.dx=(e.clientX-g.x)/g.width*(canvas.style.transform?-1:1);g.dy=(e.clientY-g.y)/g.width;g.stroke+=Math.abs(g.dx-old);
+      // 工作中的肚子单向大幅拖动是搬位置，不把它留作任务结束后的挠痒。
+      if(g.kind==='belly'&&(task==='working'||taskState(nativePose())==='working')&&nativeDragIntent(g)){clearQueuedInput();forwardNativeDrag(g,e);}
+      return;
+    }
+    if (!gesture || gesture.id !== e.pointerId) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const g = gesture, old=g.dx; g.dx = (e.clientX-g.x)/g.width * (canvas.style.transform ? -1 : 1); g.dy = (e.clientY-g.y)/g.width; g.stroke+=Math.abs(g.dx-old);
+    if (g.kind === 'belly' && !g.started && nativeDragIntent(g)) {
+      // 单向移动超过8px便交回原生拖动，避免按桌宠宽度等待20～30px；小幅来回揉仍挠痒。
+      forwardNativeDrag(g,e);
+      return;
+    }
+    if (!g.started && (g.kind === 'belly' ? g.stroke > .08 && Math.abs(g.dx) < g.stroke*.65 : Math.hypot(g.dx,g.dy) > .035)) { g.started = true; held(g.kind); }
+  }
+  function up(e) {
+    if(!forwarding&&queuedPointer?.id===e.pointerId){e.preventDefault();e.stopImmediatePropagation();if(e.type==='pointercancel')clearQueuedInput();else{queuedPointer.ended=H.performance.now();queuedPointer=null;}return;}
+    if (!forwarding && gesture?.id === e.pointerId) { e.preventDefault(); e.stopImmediatePropagation(); release(e.type !== 'pointerup'); }
+  }
+  function stride() {
+    const angle=walkDistance*Math.PI*8;
+    for (let i=0;i<feet.length;i++) {
+      const b=feet[i],t=angle+i*Math.PI;
+      if(youngchun){b.rotation+=Math.sin(t)*18;b.y+=Math.max(0,Math.cos(t))*base.height*.018;}
+      else {const point=new S.Vector2(b.worldX+Math.sin(t)*base.width*.025,b.worldY+Math.max(0,Math.cos(t))*base.height*.025);b.parent.worldToLocal(point);b.x=point.x;b.y=point.y;}
+    }
+    updateWorld(true);
+  }
+  function manipulate(dx, dy, name) {
+    const bone = skeleton.findBone(name);
+    const limit = name === 'Character_Ball_Move' ? .22 : .12;
+    let mx = dx/limit, my = dy/limit, length = Math.hypot(mx,my); if (length > 1) { mx/=length; my/=length; }
+    const point = new S.Vector2(bone.worldX + mx*base.width*.12, bone.worldY - my*base.height*.05);
+    bone.parent?.worldToLocal(point); bone.x = point.x; bone.y = point.y;
+    updateWorld(true);
+  }
+  function render(dt, now) {
+    if (!attach()) return;
+    const peek = target.classList.contains('acu-desk-pet__peek'), p = nativePose();
+    task = displayedTask(p,peek,now);
+    const blocked = !focused || doc.hidden || peek || root.classList.contains('is-dragging') || ['working','struggle'].includes(p);
+    if (blocked && ['pressed','holding','random','rebound','finishing','result'].includes(phase)) { gesture = null; rest(); }
+    const m = readMotion(now);
+    if (!m?.enabled && phase === 'random') rest();
+    if (task && phase === 'random') { rest(); mode = ''; }
+    const isWalk = !peek && !task && /^walk-[ab]$/.test(p);
+    const currentMode = peek ? 'peek:' + (target.querySelector('img')?.src || '') : task ? 'task:'+task : isWalk ? 'walk' : p;
+    if (mode !== currentMode) {
+      mode = currentMode;
+      if (phase === 'idle' || phase === 'native' || phase === 'task') {
+        if (task) {play(selectedTaskClip, true, 'task');if(taskHold&&!taskHold.until)taskHold.until=now+3000;}
+        else if (p === 'tickle' && !peek) sequence(['Tickle_Idle_1','Tickle_Idle_2','Tickle_End']);
+        else play(peek ? (/sleepy/.test(currentMode) ? (kommy?'Sleepy_1':'Close_1') : 'Idle_1') : nativeClip(p), true, p === 'idle' ? 'idle' : 'native');
+      }
+    }
+    pose = p;
+    if (gesture && !gesture.started && now-gesture.since >= 550) { gesture.started = true; held(gesture.kind); }
+    if (phase === 'idle' && p==='idle' && !task && !blocked && !gesture && m?.enabled && !H.matchMedia('(prefers-reduced-motion: reduce)').matches && now >= nextRandom) {
+      const choices = randomClips.filter(x => x !== lastRandom); lastRandom = choices[Math.floor(Math.random()*choices.length)]; play(lastRandom, true, 'random');
+    }
+    // 互动目标骨骼没有每帧归位的动画轨道；先复位，再应用当前动画，防止手势偏移逐帧累积。
+    for (const bone of [...controls,...feet]) bone.setToSetupPose();
+    state.update(dt); state.apply(skeleton); skeleton.update?.(dt); updateWorld(); elapsed += dt;
+    footPose=feet.map(b=>({x:b.x,y:b.y,rotation:b.rotation}));
+    const position=root.getBoundingClientRect();walking=isWalk && phase === 'native' && focused && !doc.hidden;
+    if (walking) { if (walkX!==null) walkDistance+=Math.abs(position.x-walkX)/position.width; stride(); }
+    else walkDistance=0;
+    walkX=walking ? position.x : null;
+    if (phase === 'random' && elapsed >= Math.max(1.5,displayDuration(clip))) rest();
+    if ((phase === 'result' || phase === 'finishing') && elapsed >= displayDuration(clip)) {
+      if (queue.length) play(queue.shift(), false, 'result'); else { rest(); mode = ''; }
+    }
+    if (gesture?.started && gesture.kind !== 'belly') manipulate(gesture.dx,gesture.dy,gesture.kind === 'face' ? 'Character_Ball_Move' : 'Character_Pat');
+    if (gesture?.started && gesture.kind === 'belly' && clip === 'Tickle_Idle_1' && elapsed >= data.findAnimation(clip).duration) play('Tickle_Idle_2',true,'holding');
+    if (rebounding) {
+      const t = Math.min(1,elapsed/.32), amount = Math.exp(-5*t)*Math.cos(t*Math.PI*3)*(1-t);
+      manipulate(rebounding.dx*amount,rebounding.dy*amount,'Character_Ball_Move');
+      if (t >= 1) { rebounding = null; sequence(['Touch_End',chooseVariant('cry',youngchun?['Sad_1','Sad_2','Sad_3','Sad_4','Sad_5','Sad_6','Sad_7']:kommy?['Sad_1','Sad_2','Sad_3','Sad_4','Sad_5']:['Sad_1','Sad_2','Sad_3','Sad_4'])]); }
+    }
+    startQueuedInput(now);
+    if(!peek&&!blocked&&(['pressed','holding','finishing','rebound','result','random'].includes(phase)||phase==='task'&&task!=='working'))freezeMotion();else unlockMotion(root);
+    const dpr = Math.min(H.devicePixelRatio || 1,3);
+    const w = Math.max(1,Math.round(target.clientWidth*dpr)), h = Math.max(1,Math.round(target.clientHeight*dpr));
+    if (canvas.width !== w || canvas.height !== h) { canvas.width=w; canvas.height=h; }
+    const gl = context.gl; gl.viewport(0,0,w,h); gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT);
+    const edge = peek ? ['bottom','top','left','right'].find(x=>target.classList.contains('is-'+x)) || 'bottom' : 'bottom';
+    canvas.style.transform = root.__butterMotionLock?.owner===controller?root.__butterMotionLock.mirror:!peek && root.querySelector('.is-flipped') ? 'scaleX(-1)' : '';
+    const hidden = [];
+    // 咏春平时坐着；行走临时改用模型自带的站立腿，绘制后恢复，避免污染下一段互动。
+    if(youngchun&&walking)for(const name of ['Leg_Stand_R','Leg_Stand_L','Knee_L','Thigh_L','Calf_L','Knee_Color_L','Calf_R']){
+      const slot=skeleton.findSlot(name);if(slot){hidden.push([slot,slot.attachment]);slot.attachment=name.startsWith('Leg_Stand_')?skeleton.getAttachmentByName(name,name):null;}
+    }
+    if (peek) for (const slot of skeleton.slots) {
+      if (slot.attachment && !(youngchun?/^(Hair_|Band_|Face|Ball_|Eye|Mouth|Tear_)/:/Hair|Ear|Face|Ball|F_|Headband/).test(slot.data.name)) { hidden.push([slot,slot.attachment]); slot.attachment=null; }
+    }
+    try {
+      if (peek) {
+        const wholeHead = skeleton.getBoundsRect(), face = selectedBounds(/Faceline/);
+        // 每帧按实际头部和下巴定界；下巴贴屏幕边，长发沿边裁齐，不留悬空的透明垫片。
+        head = { x:wholeHead.x, y:face.y-4, width:wholeHead.width, height:wholeHead.y+wholeHead.height-face.y+4 };
+      }
+      poseBounds = skeleton.getBoundsRect();
+      const full = { x:Math.min(base.x,poseBounds.x), y:Math.min(base.y,poseBounds.y) };
+      full.width = Math.max(base.x+base.width,poseBounds.x+poseBounds.width)-full.x;
+      full.height = Math.max(base.y+base.height,poseBounds.y+poseBounds.height)-full.y;
+      const bounds = peek ? head : full, rotated = peek && (edge === 'left' || edge === 'right');
+      const margin = peek ? 1.04 : 1.12;
+      const scale = Math.max((rotated ? bounds.height : bounds.width)/w,(rotated ? bounds.width : bounds.height)/h)*margin;
+      renderer.camera.setViewport(w*scale,h*scale);
+      renderer.camera.position.set(bounds.x+bounds.width/2,peek ? bounds.y+(rotated ? w : h)*scale/2 : bounds.y+bounds.height/2,0);
+      renderer.camera.up.set(edge==='left' ? -1 : edge==='right' ? 1 : 0,edge==='top' ? -1 : (edge==='bottom' ? 1 : 0),0); renderer.camera.update();
+      viewBounds = { x:renderer.camera.position.x-w*scale/2, y:renderer.camera.position.y-h*scale/2, width:w*scale, height:h*scale };
+      if (!peek) {
+        const face=selectedBounds(youngchun?/^Faceline$/:kommy?/^S1_F_Faceline$/:/S1_Faceline/),body=selectedBounds(youngchun?/^Body$/:/^S1_Body$/),hair=selectedBounds(youngchun?/^Hair_Front_[1-6]$/:/^S1_Hair_[1-7]$/),split=face.y+face.height*.66;
+        hitAreas={pat:{x:face.x,y:split,width:face.width,height:Math.max(face.y+face.height,hair.y+hair.height)-split},face:{x:face.x,y:face.y,width:face.width,height:split-face.y},belly:{x:body.x,y:body.y,width:body.width,height:Math.max(0,Math.min(body.y+body.height,face.y)-body.y)}};
+      } else hitAreas=null;
+      updateHint(peek,p);
+      renderer.begin(); renderer.drawSkeleton(skeleton, youngchun); renderer.end();
+    }
+    finally { for (const [slot,attachment] of hidden) slot.attachment=attachment; }
+  }
+  function tick(now) {
+    if (dead || !active) return;
+    try { render(Math.min(.05,(now-(lastFrame||now))/1000),now); } catch (error) { notify('显示出错，已恢复数据库原画面：'+error.message,'error'); controller.destroy(); return; }
+    lastFrame = now; raf = H.requestAnimationFrame(tick);
+  }
+  function listen(node,type,fn,options) { node.addEventListener(type,fn,options); disposers.push(()=>node.removeEventListener(type,fn,options)); }
+  const sizeKey='butter-database-pet:original-size:v2',sizeKeys=['wide','narrow'];
+  let sizeRestored=false;
+  const validSize=n=>Number.isInteger(n)&&n>=32&&n<=256;
+  function sizeBackup() {
+    const raw=H.localStorage.getItem(sizeKey);if(raw===null)return null;
+    let saved;try{saved=JSON.parse(raw);}catch(_){throw new Error('原大小恢复记录损坏，未修改大小。');}
+    const fields=(v,nullable=false)=>v&&typeof v==='object'&&!Array.isArray(v)&&Object.entries(v).every(([k,n])=>sizeKeys.includes(k)&&(validSize(n)||(nullable&&n===null)));
+    if(!saved||saved.version!==2||!fields(saved.before)||!fields(saved.overrides,true)||!fields(saved.last)||!fields(saved.pending)||sizeKeys.some(k=>!validSize(saved.before[k])||!(k in saved.overrides)))throw new Error('原大小恢复记录不兼容，未修改大小。');
+    return saved;
+  }
+  function setSize(patch) {
+    if (!patch || typeof patch!=='object' || Array.isArray(patch) || Object.entries(patch).some(([k,n])=>!sizeKeys.includes(k)||!validSize(n))) throw new Error('大小请输入32～256的整数。');
+    const pet=api(),current=pet.getAppearance().size,changed=Object.fromEntries(Object.entries(patch).filter(([k,n])=>current[k]!==n));
+    if(!Object.keys(changed).length)return current;
+    const overrides=pet.getOverrides().size||{},before=Object.fromEntries(sizeKeys.map(k=>[k,k in overrides?overrides[k]:null]));
+    const saved=sizeBackup()||{version:2,before:Object.fromEntries(sizeKeys.map(k=>[k,current[k]])),overrides:before,last:{},pending:{}};
+    for(const k of sizeKeys){if(current[k]===saved.pending[k])saved.last[k]=current[k];if(k in changed&&current[k]!==saved.last[k]&&current[k]!==saved.pending[k]){saved.before[k]=current[k];saved.overrides[k]=before[k];}}
+    saved.pending=changed;
+    try{H.localStorage.setItem(sizeKey,JSON.stringify(saved));}catch(_){throw new Error('无法保存原大小恢复记录，未修改大小。');}
+    pet.updateAppearance({size:changed});sizeRestored=false;return pet.getAppearance().size;
+  }
+  function restoreSize({fallback=true}={}) {
+    const pet=api(),saved=sizeBackup(),current=pet.getAppearance().size,patch={};
+    if(saved){for(const k of sizeKeys)if(current[k]===saved.last[k]||current[k]===saved.pending[k])patch[k]=saved.overrides[k];}
+    else if(fallback){patch.wide=null;patch.narrow=null;}
+    // 数据库写入是同步保存；停用/iframe移除时在当前清理调用内完成，不依赖iframe后续任务。
+    if(Object.keys(patch).length)pet.updateAppearance({size:patch});
+    if(saved)H.localStorage.removeItem(sizeKey);
+    sizeRestored=true;
+    return pet.getAppearance().size;
+  }
+  function showSizePanel() {
+    if (panel) return; const node=doc.createElement('dialog'); node.className='butter-v2-panel';
+    node.style.boxSizing='border-box';node.style.maxHeight='calc(100vh - 90px)';node.style.overflow='auto';
+    const title=doc.createElement('strong'); title.textContent=characterName+'大小（两端统一，32～256px）'; node.append(title);
+    const message=doc.createElement('p');message.setAttribute('role','status');
+    const row=doc.createElement('label');row.textContent='大小（像素）';
+    const input=doc.createElement('input');input.type='range';input.min='32';input.max='256';input.style.width='100%';
+    const number=doc.createElement('input');number.type='number';number.min='32';number.max='256';number.style.width='62px';
+    input.setAttribute('aria-label','桌宠大小');number.setAttribute('aria-label','桌宠大小数值');
+    const sync=value=>{input.value=String(value);number.value=String(value);};
+    sync(Math.round(root?.getBoundingClientRect().width)||api().getAppearance().size.wide);
+    const change=value=>{try{sync(setSize({wide:value,narrow:value}).wide);message.textContent='已保存：电脑和手机均为'+value+'px。';}catch(e){sync(api().getAppearance().size.wide);message.textContent=e.message;notify(e.message,'error');}};
+    input.oninput=()=>{number.value=input.value;};input.onchange=()=>change(Number(input.value));number.onchange=()=>change(Number(number.value));
+    row.append(input,number,doc.createTextNode(' px'));node.append(row);
+    const shortcuts=doc.createElement('div');shortcuts.dataset.sizeUnified='';shortcuts.style.display='flex';shortcuts.style.flexWrap='wrap';
+    for(const value of [64,88,128,160,200,256]){const b=doc.createElement('button');b.type='button';b.textContent=value+'px';b.onclick=()=>change(value);shortcuts.append(b);}node.append(shortcuts);
+    const note=doc.createElement('p');note.textContent='选定大小同时用于电脑和手机。关闭脚本或恢复原图时还原调整前大小；切换角色和在线更新保留当前大小。';node.append(note,message);
+    const reset=doc.createElement('button');reset.type='button';reset.textContent='恢复默认大小';reset.onclick=()=>{const value=api()?.getDefaults?.().size?.wide;if(!validSize(value)){message.textContent='无法读取数据库默认大小。';return;}change(value);};node.append(reset);
+    const close=doc.createElement('button');close.textContent='完成';close.onclick=()=>{node.remove();panel=null;};node.append(close);node.oncancel=()=>{panel=null;node.remove();};doc.body.append(node);node.show();panel=node;
+  }
+  function showCharacterPanel() {
+    if(typeof env.showCharacterPanel==='function')return env.showCharacterPanel();
+    if(characterPanel)return;
+    if(typeof env.selectCharacter!=='function'){notify('请重新导入2.6.0或更新的入口，启用角色选择。','warning');return;}
+    const node=doc.createElement('dialog');node.className='butter-v2-panel';node.setAttribute('aria-label','选择桌宠角色');
+    const title=doc.createElement('strong');title.textContent='选择桌宠角色';node.append(title);
+    const note=doc.createElement('p');note.textContent='首次使用角色需下载模型；成功后保存在当前浏览器，之后可离线切换。';node.append(note);
+    const message=doc.createElement('p');message.setAttribute('role','status');const buttons=[];
+    for(const [id,p]of Object.entries(profiles)){
+      const button=doc.createElement('button');button.type='button';button.textContent=p.name+(id===character?'（当前）':'');button.disabled=id===character;
+      button.onclick=async()=>{buttons.forEach(b=>b.disabled=true);message.textContent='正在准备'+p.name+'，当前角色继续显示；互动结束后切换。';
+        try{if(!await env.selectCharacter(id)&&!dead)message.textContent='暂未切换，保留'+characterName+'；请查看提示后重试。';}
+        catch(e){if(!dead)message.textContent='切换失败：'+e.message;}
+        finally{if(!dead)buttons.forEach(b=>b.disabled=b.dataset.character===character);}
+      };button.dataset.character=id;buttons.push(button);node.append(button);
+    }
+    node.append(message);const close=doc.createElement('button');close.textContent='关闭';close.onclick=()=>{node.remove();characterPanel=null;};node.append(close);
+    node.oncancel=()=>{node.remove();characterPanel=null;};doc.body.append(node);node.show();characterPanel=node;
+  }
+  const controller = {
+    version:VERSION, character, characterName, migrateLegacy, setSize, showSizePanel, showCharacterPanel, restoreSize,
+    isActive:()=>active&&!dead,
+    selectCharacter:id=>env.selectCharacter?.(id),
+    busy:()=>!!gesture || !!pendingAction || ['rebound','result','finishing','holding','pressed'].includes(phase),
+    status:()=>({version:VERSION,character,characterName,characters:Object.entries(profiles).map(([id,p])=>({id,name:p.name})),applied:active && !!target,clip,phase,pose,task,interaction,hitAreas,walking,walkDistance,positionLocked:root?.__butterMotionLock?.owner===controller,feet:feet.map((b,i)=>({x:b.x,y:b.y,rotation:b.rotation,animationX:footPose[i]?.x,animationY:footPose[i]?.y,animationRotation:footPose[i]?.rotation})),history:[...history],size:api()?.getAppearance().size,animations:data.animations.map(x=>({name:x.name,duration:x.duration})),bone:controls[0].x,controls:controls.map(b=>({name:b.data.name,x:b.x,y:b.y,setupX:b.data.x,setupY:b.data.y})),control:{x:controls[0].x,y:controls[0].y,setupX:controls[0].data.x,setupY:controls[0].data.y},viewBounds,poseBounds}),
+    activate() {
+      ensureLive(); active=true; doc.head.append(css); planRandom();
+      // 现有2.2入口的按钮动态调用restore；补充尺寸恢复，无需再次导入入口。
+      const loader=H.__BUTTER_DATABASE_PET_V2__;
+      if(typeof loader?.restore==='function'){
+        const original=loader.restore.butterSizeBase||loader.restore;
+        const restore=async()=>{try{await restoreSize();return original.call(loader);}catch(e){notify('恢复失败，保留当前画面和尺寸恢复记录，可重试：'+e.message,'error');}};
+        restore.butterSizeBase=original;loader.restore=restore;disposers.push(()=>{if(loader.restore===restore)loader.restore=original;});
+      }
+      listen(doc,'pointerdown',down,true);listen(doc,'pointermove',move,true);listen(doc,'pointerup',up,true);listen(doc,'pointercancel',up,true);
+      listen(H,'blur',()=>{focused=false;gesture=null;clearQueuedInput();rest();});listen(H,'focus',()=>{focused=true;planRandom();});
+      listen(doc,'visibilitychange',()=>{if(doc.hidden){gesture=null;clearQueuedInput();rest();}else planRandom();});
+      listen(canvas,'webglcontextlost',e=>{e.preventDefault();notify('绘图上下文已丢失，请从角色菜单重新启用。','warning');controller.destroy();});
+      H.ButterDatabasePet=controller; raf=H.requestAnimationFrame(tick);
+    },
+    destroy() {
+      if(dead)return;
+      const ownsDisplay=active&&H.ButterDatabasePet===controller;
+      dead=true;active=false;
+      // 新版本已接管时旧实例只清理自己；真正停用时恢复仍属于本脚本的尺寸。
+      if(ownsDisplay&&!sizeRestored)try{restoreSize({fallback:false});}catch(e){notify('已恢复原图，但尺寸还原失败，恢复记录已保留：'+e.message,'error');}
+      H.cancelAnimationFrame(raf);gesture=null;queue=[];taskHold=null;clearQueuedInput();disposers.splice(0).forEach(fn=>fn());restoreHint(root);unlockMotion(root,true);clearMotionRelease(root);hoverPoint=null;unmount();css.remove();panel?.remove();panel=null;characterPanel?.remove();characterPanel=null;signal.removeEventListener('abort',abortLoad);disposeGraphics();
+      if(H.ButterDatabasePet===controller)delete H.ButterDatabasePet;
+    }
+  };
+  signal.addEventListener('abort',()=>controller.destroy(),{once:true});
+  return controller;
+}

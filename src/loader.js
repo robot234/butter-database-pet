@@ -6,9 +6,10 @@
   let H=window;try{for(let i=0;i<12&&H.parent!==H;i++){if(!H.parent.document)break;H=H.parent;}}catch(_){}
   const KEY='__BUTTER_DATABASE_PET_V2__';H[KEY]?.destroy();
   let stopped=false,suspended=false,epoch=0,current=null,staged=null,loading=null,loadAbort=null,frameObserver=null,controlPanel=null;
-  const CACHE_DB='butter-database-pet:browser-cache:v1',ACTIVE_KEY='active:'+CONFIG.base,CHARACTER_KEY='butter-database-pet:selected-character:v1';
-  let selectedCharacter='butter',currentManifest=null;
-  try{const saved=H.localStorage.getItem(CHARACTER_KEY);if(['butter','kommy'].includes(saved))selectedCharacter=saved;}catch(_){}
+  const CACHE_DB='butter-database-pet:browser-cache:v1',ACTIVE_KEY=(CONFIG.localPreview?'preview-active:':'active:')+CONFIG.base,CHARACTER_KEY='butter-database-pet:selected-character:'+(CONFIG.localPreview?'preview:v1':'v1');
+  const characters=[['butter','黄油'],['kommy','柯米'],['youngchun','咏春']];
+  let selectedCharacter=CONFIG.localPreview?'youngchun':'butter',currentManifest=null;
+  try{const saved=H.localStorage.getItem(CHARACTER_KEY);if(characters.some(([id])=>id===saved))selectedCharacter=saved;}catch(_){}
   let cacheDb=null,cacheOpen=null,cacheWarning=false,loadSource='network';
   const abort=new AbortController(),buttonStops=[];
   const notify=(text,kind='info')=>{const toast=H.toastr||window.toastr;if(toast?.[kind])toast[kind](text,'嘟嘟脸桌宠');else console.log('[嘟嘟脸] '+text);};
@@ -79,7 +80,14 @@
     }
     // 导入包自带本版自有代码，未发布或离线时也能启动；模型仍从固定上游按需下载。
     const bundled=url===CONFIG.base+CONFIG.initial.path&&expected===CONFIG.initial.sha256&&typeof CONFIG.initialRuntime==='string';
-    const bytes=bundled?new TextEncoder().encode(CONFIG.initialRuntime).buffer:await fetchBytes(url,signal),digest=await sha256(bytes);
+    const local=CONFIG.bundledResources?.[url];
+    let bytes;
+    if(bundled)bytes=new TextEncoder().encode(CONFIG.initialRuntime).buffer;
+    else if(local){
+      if(local.sha256!==expected||typeof local.base64!=='string'||local.base64.length>12*1024*1024)throw new Error('本地资源清单不兼容：'+url);
+      const decoded=owner.atob(local.base64);bytes=Uint8Array.from(decoded,c=>c.charCodeAt(0)).buffer;
+    }else bytes=await fetchBytes(url,signal);
+    const digest=await sha256(bytes);
     if(expected&&digest!==expected)throw new Error('资源摘要不一致：'+url);
     if(signal.aborted)throw new DOMException('已停止','AbortError');
     await cacheOp('readwrite',store=>store.put({schema:1,bytes,sha256:digest},url));return bytes;
@@ -106,10 +114,10 @@
     // 面板由入口持有；恢复原图、首次加载失败或暂时没有画布时仍能选择并启用角色。
     Object.assign(node.style,{position:'fixed',inset:'64px 12px auto auto',margin:'0',padding:'18px',width:'330px',maxWidth:'calc(100vw - 24px)',maxHeight:'calc(100vh - 90px)',overflow:'auto',boxSizing:'border-box',zIndex:'9500',border:'1px solid #bd9452',borderRadius:'12px',background:'#fffaf0',color:'#49371e',font:'14px/1.6 "Microsoft YaHei",sans-serif'});
     const title=doc.createElement('strong');title.textContent='选择桌宠角色';node.append(title);
-    const note=doc.createElement('p');note.textContent=suspended||!current?.status().applied?'选择角色即可启用；首次下载需要联网，下载过的角色可离线使用。':'选择后自动切换；下载过的角色可离线使用。';node.append(note);
+    const note=doc.createElement('p');note.textContent=CONFIG.localPreview?'本地预览已自带咏春；黄油、柯米首次下载需要联网，缓存后可离线切换。':suspended||!current?.status().applied?'选择角色即可启用；首次下载需要联网，下载过的角色可离线使用。':'选择后自动切换；下载过的角色可离线使用。';node.append(note);
     const message=doc.createElement('p');message.setAttribute('role','status');const buttons=[];
     const applied=id=>!suspended&&current?.character===id&&current.status().applied;
-    for(const [id,name]of [['butter','黄油'],['kommy','柯米']]){
+    for(const [id,name]of characters){
       const button=doc.createElement('button');button.type='button';button.textContent=name+(applied(id)?'（当前）':'');button.disabled=!!applied(id);button.style.margin='8px 8px 0 0';buttons.push([id,button]);
       button.onclick=async()=>{buttons.forEach(([,b])=>b.disabled=true);message.textContent='正在准备'+name+'，已有互动会完整播放后再切换。';
         try{if(await controller.selectCharacter(id)){if(controlPanel===node)closeControlPanel();}else if(controlPanel===node)message.textContent='暂未启用，请查看提示后重试；当前画面保留。';}
@@ -141,6 +149,7 @@
     await cacheOp('readwrite',store=>store.put({schema:1,manifest:m},ACTIVE_KEY));return true;
   }
   async function run(force=false,character=selectedCharacter){
+    if(force&&CONFIG.localPreview){notify('这是咏春本地预览版，尚未发布在线更新。','info');return false;}
     if(suspended){if(force)notify('当前显示数据库原图，从“选择桌宠角色”可重新启用。');return false;}
     if(stopped||loading)return loading;
     const generation=epoch;
@@ -151,7 +160,7 @@
         if(!force){
           if(current){if((current.character||'butter')===character&&current.isActive?.()!==false)return true;m=currentManifest;}
           const saved=await cacheOp('readonly',store=>store.get(ACTIVE_KEY));
-          try{if(!m&&saved?.schema===1){const cached=checkManifest(saved.manifest);if(!newer(CONFIG.initial.version,cached.version)){m=cached;loadSource='cache';}}}catch(_){}
+          try{if(!m&&saved?.schema===1){const cached=checkManifest(saved.manifest);if(CONFIG.localPreview?cached.version===CONFIG.initial.version&&cached.sha256===CONFIG.initial.sha256:!newer(CONFIG.initial.version,cached.version)){m=cached;loadSource='cache';}}}catch(_){}
         }
         if(!m&&!force&&typeof CONFIG.initialRuntime==='string')m=checkManifest(CONFIG.initial);
         if(!m)try{m=checkManifest(JSON.parse(await fetchText(CONFIG.base+'manifest.json',abort.signal)));}
@@ -166,7 +175,7 @@
     });return loading;
   }
   const controller={showCharacterPanel,checkUpdate:()=>run(true),async apply(){if(stopped)return;suspended=false;if(loading)await loading;if(!stopped&&!suspended)return run();},restore(){if(stopped)return;closeControlPanel();suspended=true;epoch++;loadAbort?.abort();staged?.destroy();current?.destroy();staged=null;current=null;notify('已恢复数据库原图；可从角色菜单重新启用。','success');},status:()=>({...current?.status()||{applied:false,loading:!!loading,suspended},cacheSource:loadSource,cacheAvailable:!!cacheDb&&!cacheWarning}),destroy(){if(stopped)return;closeControlPanel();stopped=true;epoch++;abort.abort();loadAbort?.abort();staged?.destroy();current?.destroy();staged=null;current=null;cacheDb?.close();cacheDb=null;frameObserver?.disconnect();buttonStops.splice(0).forEach(fn=>fn());owner.removeEventListener('pagehide',pagehide);if(H[KEY]===controller)delete H[KEY];}};
-  controller.selectCharacter=async id=>{if(!['butter','kommy'].includes(id)){notify('不支持的桌宠角色。','error');return false;}while(loading){const pending=loading;await pending;if(loading===pending)loading=null;}if(stopped)return false;suspended=false;return run(false,id);};
+  controller.selectCharacter=async id=>{if(!characters.some(([key])=>key===id)){notify('不支持的桌宠角色。','error');return false;}while(loading){const pending=loading;await pending;if(loading===pending)loading=null;}if(stopped)return false;suspended=false;return run(false,id);};
   const pagehide=()=>controller.destroy();owner.addEventListener('pagehide',pagehide);
   H[KEY]=controller;
   const ownFrame=owner.frameElement;

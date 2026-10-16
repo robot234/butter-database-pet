@@ -7,7 +7,7 @@ const manifest={schema:1,version,path:`releases/${version}/runtime.js`,sha256:ha
 const dest=path.join(dir,manifest.path);
 if(fs.existsSync(dest)&&fs.readFileSync(dest,'utf8')!==runtime)throw new Error('已发布版本不可覆盖；请升级版本号。');
 fs.mkdirSync(path.dirname(dest),{recursive:true});fs.writeFileSync(dest,runtime);
-const config={base:'https://raw.githubusercontent.com/robot234/butter-database-pet/main/',initial:manifest,legacyHashes:JSON.parse(fs.readFileSync(path.join(src,'legacy-hashes.json'),'utf8'))};
+const config={base:'https://raw.githubusercontent.com/robot234/butter-database-pet/main/',initial:manifest,initialRuntime:runtime,legacyHashes:JSON.parse(fs.readFileSync(path.join(src,'legacy-hashes.json'),'utf8'))};
 const content='// 黄油在线入口；由 build-online.cjs 生成。\n'+fs.readFileSync(path.join(src,'loader.js'),'utf8').replace('/*__ONLINE_CONFIG__*/null',JSON.stringify(config));
 const meta=JSON.parse(fs.readFileSync(path.join(src,'meta.json'),'utf8'));meta.data.version=version;
 fs.writeFileSync(path.join(dir,'manifest.json'),JSON.stringify(manifest,null,2)+'\n');

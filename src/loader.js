@@ -2,14 +2,16 @@
   'use strict';
   const CONFIG = /*__ONLINE_CONFIG__*/null;
   const owner=window, TH=window.TavernHelper;
-  if(!TH){console.warn('[黄油] 未检测到酒馆助手');return;}
+  if(!TH){console.warn('[嘟嘟脸] 未检测到酒馆助手');return;}
   let H=window;try{for(let i=0;i<12&&H.parent!==H;i++){if(!H.parent.document)break;H=H.parent;}}catch(_){}
   const KEY='__BUTTER_DATABASE_PET_V2__';H[KEY]?.destroy();
-  let stopped=false,suspended=false,epoch=0,current=null,staged=null,loading=null,loadAbort=null,frameObserver=null;
-  const CACHE_DB='butter-database-pet:browser-cache:v1',ACTIVE_KEY='active:'+CONFIG.base;
+  let stopped=false,suspended=false,epoch=0,current=null,staged=null,loading=null,loadAbort=null,frameObserver=null,controlPanel=null;
+  const CACHE_DB='butter-database-pet:browser-cache:v1',ACTIVE_KEY='active:'+CONFIG.base,CHARACTER_KEY='butter-database-pet:selected-character:v1';
+  let selectedCharacter='butter',currentManifest=null;
+  try{const saved=H.localStorage.getItem(CHARACTER_KEY);if(['butter','kommy'].includes(saved))selectedCharacter=saved;}catch(_){}
   let cacheDb=null,cacheOpen=null,cacheWarning=false,loadSource='network';
   const abort=new AbortController(),buttonStops=[];
-  const notify=(text,kind='info')=>{const toast=H.toastr||window.toastr;if(toast?.[kind])toast[kind](text,'黄油桌宠');else console.log('[黄油] '+text);};
+  const notify=(text,kind='info')=>{const toast=H.toastr||window.toastr;if(toast?.[kind])toast[kind](text,'嘟嘟脸桌宠');else console.log('[嘟嘟脸] '+text);};
   // 普通HTTP页面没有crypto.subtle；使用同一SHA-256算法，不跳过完整性校验。
   function sha256Fallback(bytes) {
     const constants=new Uint32Array([
@@ -75,7 +77,9 @@
       if(record.schema===1&&Object.prototype.toString.call(record.bytes)==='[object ArrayBuffer]'&&record.bytes.byteLength<=8*1024*1024&&/^[a-f0-9]{64}$/.test(record.sha256)&&(!expected||record.sha256===expected)&&await sha256(record.bytes)===record.sha256)return record.bytes;
       await cacheOp('readwrite',store=>store.delete(url));
     }
-    const bytes=await fetchBytes(url,signal),digest=await sha256(bytes);
+    // 导入包自带本版自有代码，未发布或离线时也能启动；模型仍从固定上游按需下载。
+    const bundled=url===CONFIG.base+CONFIG.initial.path&&expected===CONFIG.initial.sha256&&typeof CONFIG.initialRuntime==='string';
+    const bytes=bundled?new TextEncoder().encode(CONFIG.initialRuntime).buffer:await fetchBytes(url,signal),digest=await sha256(bytes);
     if(expected&&digest!==expected)throw new Error('资源摘要不一致：'+url);
     if(signal.aborted)throw new DOMException('已停止','AbortError');
     await cacheOp('readwrite',store=>store.put({schema:1,bytes,sha256:digest},url));return bytes;
@@ -95,48 +99,74 @@
     return m;
   }
   function newer(a,b){const x=a.split('.').map(Number),y=b.split('.').map(Number);for(let i=0;i<3;i++)if(x[i]!==y[i])return x[i]>y[i];return false;}
+  function closeControlPanel(){controlPanel?.remove();controlPanel=null;}
+  function showCharacterPanel(){
+    if(stopped||controlPanel)return;
+    const doc=H.document,node=doc.createElement('dialog');node.className='butter-v2-panel';node.setAttribute('aria-label','选择桌宠角色');
+    // 面板由入口持有；恢复原图、首次加载失败或暂时没有画布时仍能选择并启用角色。
+    Object.assign(node.style,{position:'fixed',inset:'64px 12px auto auto',margin:'0',padding:'18px',width:'330px',maxWidth:'calc(100vw - 24px)',maxHeight:'calc(100vh - 90px)',overflow:'auto',boxSizing:'border-box',zIndex:'9500',border:'1px solid #bd9452',borderRadius:'12px',background:'#fffaf0',color:'#49371e',font:'14px/1.6 "Microsoft YaHei",sans-serif'});
+    const title=doc.createElement('strong');title.textContent='选择桌宠角色';node.append(title);
+    const note=doc.createElement('p');note.textContent=suspended||!current?.status().applied?'选择角色即可启用；首次下载需要联网，下载过的角色可离线使用。':'选择后自动切换；下载过的角色可离线使用。';node.append(note);
+    const message=doc.createElement('p');message.setAttribute('role','status');const buttons=[];
+    const applied=id=>!suspended&&current?.character===id&&current.status().applied;
+    for(const [id,name]of [['butter','黄油'],['kommy','柯米']]){
+      const button=doc.createElement('button');button.type='button';button.textContent=name+(applied(id)?'（当前）':'');button.disabled=!!applied(id);button.style.margin='8px 8px 0 0';buttons.push([id,button]);
+      button.onclick=async()=>{buttons.forEach(([,b])=>b.disabled=true);message.textContent='正在准备'+name+'，已有互动会完整播放后再切换。';
+        try{if(await controller.selectCharacter(id)){if(controlPanel===node)closeControlPanel();}else if(controlPanel===node)message.textContent='暂未启用，请查看提示后重试；当前画面保留。';}
+        catch(error){if(controlPanel===node)message.textContent='启用失败：'+error.message;}
+        finally{if(controlPanel===node)buttons.forEach(([key,b])=>b.disabled=!!applied(key));}
+      };node.append(button);
+    }
+    node.append(message);const close=doc.createElement('button');close.textContent='关闭';close.style.margin='8px 8px 0 0';close.onclick=closeControlPanel;node.oncancel=closeControlPanel;node.append(close);doc.body.append(node);controlPanel=node;node.show();
+  }
   function pause(ms){return new Promise(resolve=>{const finish=()=>{H.clearTimeout(timer);abort.signal.removeEventListener('abort',finish);resolve();};const timer=H.setTimeout(finish,ms);abort.signal.addEventListener('abort',finish,{once:true});if(abort.signal.aborted)finish();});}
-  async function waitApi(signal){const start=Date.now();while(!stopped&&!signal.aborted&&!H.AutoCardUpdaterAPI?.deskPet){if(Date.now()-start>20000)throw new Error('未找到数据库桌宠接口，请加载数据库后点“应用黄油桌宠”。');await pause(250);}if(stopped||signal.aborted)throw new DOMException('已停止','AbortError');}
-  async function load(m){
+  async function waitApi(signal){const start=Date.now();while(!stopped&&!signal.aborted&&!H.AutoCardUpdaterAPI?.deskPet){if(Date.now()-start>20000)throw new Error('未找到数据库桌宠接口，请加载数据库后从“选择桌宠角色”重试。');await pause(250);}if(stopped||signal.aborted)throw new DOMException('已停止','AbortError');}
+  async function load(m,character){
     const request=new AbortController();loadAbort=request;
     const text=await fetchText(CONFIG.base+m.path,request.signal,m.sha256);
     if(await sha256(text)!==m.sha256)throw new Error('脚本摘要不一致，保留当前版本');
     const factory=owner.Function(text+'\nreturn createButterRuntime;')();
-    const prepared=await factory({host:H,owner,signal:request.signal,sha256,fetchText,fetchAsset,notify,legacyHashes:CONFIG.legacyHashes});staged=prepared;
+    const prepared=await factory({host:H,owner,signal:request.signal,sha256,fetchText,fetchAsset,notify,legacyHashes:CONFIG.legacyHashes,character,selectCharacter:id=>controller.selectCharacter(id),showCharacterPanel});staged=prepared;
     if(prepared.version!==m.version){prepared.destroy();throw new Error('清单与脚本版本不一致');}
     await waitApi(request.signal);
     if(!current){H.__BUTTER_DATABASE_PET_V1__?.destroy();await prepared.migrateLegacy();}
     // 当前操作播完再切版本；长时间按住时延后到下一次检查。
-    const start=Date.now();while(current?.busy()&&!stopped&&!request.signal.aborted){if(Date.now()-start>30000){prepared.destroy();staged=null;return false;}await pause(100);}
+    const start=Date.now();while(current?.busy()&&!stopped&&!request.signal.aborted){if(Date.now()-start>30000){prepared.destroy();staged=null;notify('当前互动尚未结束，请松手后重新切换或检查更新。','warning');return false;}await pause(100);}
     if(stopped||request.signal.aborted||suspended){prepared.destroy();return false;}
     const previous=current;
     try{prepared.activate();}catch(e){prepared.destroy();throw e;}
-    current=prepared;staged=null;previous?.destroy();
+    current=prepared;currentManifest=m;selectedCharacter=prepared.character||character;staged=null;previous?.destroy();
+    try{H.localStorage.setItem(CHARACTER_KEY,selectedCharacter);}catch(_){notify('角色已切换，但浏览器未能记住选择；下次启动可能回到黄油。','warning');}
     // 只有新实例完整加载并接管成功，才更新下次启动使用的版本；坏更新不会污染已用版本。
     await cacheOp('readwrite',store=>store.put({schema:1,manifest:m},ACTIVE_KEY));return true;
   }
-  async function run(force=false){
-    if(suspended){if(force)notify('当前显示数据库原图，点“应用黄油桌宠”可重新启用。');return;}
+  async function run(force=false,character=selectedCharacter){
+    if(suspended){if(force)notify('当前显示数据库原图，从“选择桌宠角色”可重新启用。');return false;}
     if(stopped||loading)return loading;
     const generation=epoch;
-    loading=(async()=>{
+    // 先登记任务，再执行正文；同步返回也必须在登记后释放，避免留下已结束的Promise。
+    loading=Promise.resolve().then(async()=>{
       try{
         let m;loadSource='network';
         if(!force){
-          if(current)return;
+          if(current){if((current.character||'butter')===character&&current.isActive?.()!==false)return true;m=currentManifest;}
           const saved=await cacheOp('readonly',store=>store.get(ACTIVE_KEY));
-          try{if(saved?.schema===1){const cached=checkManifest(saved.manifest);if(!newer(CONFIG.initial.version,cached.version)){m=cached;loadSource='cache';}}}catch(_){}
+          try{if(!m&&saved?.schema===1){const cached=checkManifest(saved.manifest);if(!newer(CONFIG.initial.version,cached.version)){m=cached;loadSource='cache';}}}catch(_){}
         }
+        if(!m&&!force&&typeof CONFIG.initialRuntime==='string')m=checkManifest(CONFIG.initial);
         if(!m)try{m=checkManifest(JSON.parse(await fetchText(CONFIG.base+'manifest.json',abort.signal)));}
         catch(e){if(current){if(force)notify('更新检查失败，继续使用 '+current.version+'：'+e.message,'warning');return;}m=checkManifest(CONFIG.initial);}
         if(stopped||suspended||generation!==epoch)return;
-        if(current&&!newer(m.version,current.version)){if(force)notify('当前已是 '+current.version,'success');return;}
-        if(await load(m)&&!stopped&&!suspended&&generation===epoch)notify('黄油 '+m.version+' 已加载'+(loadSource==='cache'?'（浏览器缓存）':'')+'；关闭脚本会恢复数据库原图。','success');
-      }catch(e){staged?.destroy();staged=null;if(!stopped&&!suspended&&generation===epoch)notify('加载失败'+(current?'，当前版本继续运行':'，数据库原图仍保留')+'：'+e.message,'error');}
+        if(!current&&newer(CONFIG.initial.version,m.version))m=checkManifest(CONFIG.initial);
+        if(current&&!newer(m.version,current.version)&&(current.character||'butter')===character&&current.isActive?.()!==false){if(force)notify('当前已是 '+current.version,'success');return true;}
+        if(await load(m,character)&&!stopped&&!suspended&&generation===epoch){notify((current.characterName||'黄油')+' '+m.version+' 已加载'+(loadSource==='cache'?'（浏览器缓存）':'')+'；关闭脚本会恢复数据库原图。','success');return true;}
+        return false;
+      }catch(e){staged?.destroy();staged=null;if(!stopped&&!suspended&&generation===epoch)notify('加载失败'+(current?'，当前角色继续运行':'，数据库原图仍保留')+'：'+e.message,'error');return false;}
       finally{loading=null;}
-    })();return loading;
+    });return loading;
   }
-  const controller={checkUpdate:()=>run(true),async apply(){if(stopped)return;suspended=false;if(loading)await loading;if(!stopped&&!suspended)return run();},restore(){if(stopped)return;suspended=true;epoch++;loadAbort?.abort();staged?.destroy();current?.destroy();staged=null;current=null;notify('已恢复数据库原图；可随时再次应用黄油。','success');},status:()=>({...current?.status()||{applied:false,loading:!!loading,suspended},cacheSource:loadSource,cacheAvailable:!!cacheDb&&!cacheWarning}),destroy(){if(stopped)return;stopped=true;epoch++;abort.abort();loadAbort?.abort();staged?.destroy();current?.destroy();staged=null;current=null;cacheDb?.close();cacheDb=null;frameObserver?.disconnect();buttonStops.splice(0).forEach(fn=>fn());owner.removeEventListener('pagehide',pagehide);if(H[KEY]===controller)delete H[KEY];}};
+  const controller={showCharacterPanel,checkUpdate:()=>run(true),async apply(){if(stopped)return;suspended=false;if(loading)await loading;if(!stopped&&!suspended)return run();},restore(){if(stopped)return;closeControlPanel();suspended=true;epoch++;loadAbort?.abort();staged?.destroy();current?.destroy();staged=null;current=null;notify('已恢复数据库原图；可从角色菜单重新启用。','success');},status:()=>({...current?.status()||{applied:false,loading:!!loading,suspended},cacheSource:loadSource,cacheAvailable:!!cacheDb&&!cacheWarning}),destroy(){if(stopped)return;closeControlPanel();stopped=true;epoch++;abort.abort();loadAbort?.abort();staged?.destroy();current?.destroy();staged=null;current=null;cacheDb?.close();cacheDb=null;frameObserver?.disconnect();buttonStops.splice(0).forEach(fn=>fn());owner.removeEventListener('pagehide',pagehide);if(H[KEY]===controller)delete H[KEY];}};
+  controller.selectCharacter=async id=>{if(!['butter','kommy'].includes(id)){notify('不支持的桌宠角色。','error');return false;}while(loading){const pending=loading;await pending;if(loading===pending)loading=null;}if(stopped)return false;suspended=false;return run(false,id);};
   const pagehide=()=>controller.destroy();owner.addEventListener('pagehide',pagehide);
   H[KEY]=controller;
   const ownFrame=owner.frameElement;
@@ -144,7 +174,7 @@
   const event=typeof getButtonEvent==='function'?getButtonEvent:TH.getButtonEvent;
   const on=typeof eventOn==='function'?eventOn:TH.eventOn;
   const off=typeof eventRemoveListener==='function'?eventRemoveListener:TH.eventRemoveListener;
-  if(event&&on)for(const [name,fn]of [['应用黄油桌宠',()=>controller.apply()],['检查在线更新',()=>run(true)],['恢复数据库原图',()=>controller.restore()],['调整桌宠大小',()=>current?.showSizePanel()]]){const nameEvent=event(name),sub=on(nameEvent,fn);if(sub?.stop)buttonStops.push(()=>sub.stop());else if(off)buttonStops.push(()=>off(nameEvent,fn));}
+  if(event&&on)for(const [name,fn]of [['选择桌宠角色',showCharacterPanel],['检查在线更新',()=>run(true)],['恢复数据库原图',()=>controller.restore()],['调整桌宠大小',()=>current?.showSizePanel()]]){const nameEvent=event(name),sub=on(nameEvent,fn);if(sub?.stop)buttonStops.push(()=>sub.stop());else if(off)buttonStops.push(()=>off(nameEvent,fn));}
   // 缓存命中时启动/再次应用不访问网络；只在手动检查更新或缓存缺失时下载。
   run();
 })();

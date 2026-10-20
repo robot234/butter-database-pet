@@ -1,5 +1,5 @@
 'use strict';
-const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),vm=require('node:vm');
 const dir=__dirname,src=path.join(dir,'src'),hash=t=>crypto.createHash('sha256').update(t).digest('hex');
 const runtime=fs.readFileSync(path.join(src,'online-runtime.js'),'utf8');
 const version=runtime.match(/const VERSION = '([^']+)'/)[1];
@@ -7,7 +7,9 @@ const manifest={schema:1,version,path:`releases/${version}/runtime.js`,sha256:ha
 const dest=path.join(dir,manifest.path);
 if(fs.existsSync(dest)&&fs.readFileSync(dest,'utf8')!==runtime)throw new Error('已发布版本不可覆盖；请升级版本号。');
 fs.mkdirSync(path.dirname(dest),{recursive:true});fs.writeFileSync(dest,runtime);
-const config={base:'https://raw.githubusercontent.com/robot234/butter-database-pet/main/',initial:manifest,initialRuntime:runtime,legacyHashes:JSON.parse(fs.readFileSync(path.join(src,'legacy-hashes.json'),'utf8'))};
+const catalog=vm.runInNewContext(runtime+'\ncreateButterRuntime.describe();',{}, {timeout:1000});
+if(catalog.version!==version||!catalog.characters?.length)throw new Error('运行时人物名单无效。');
+const config={base:'https://raw.githubusercontent.com/robot234/butter-database-pet/main/',initial:manifest,initialRuntime:runtime,characters:catalog.characters,legacyHashes:JSON.parse(fs.readFileSync(path.join(src,'legacy-hashes.json'),'utf8'))};
 const content='// 黄油在线入口；由 build-online.cjs 生成。\n'+fs.readFileSync(path.join(src,'loader.js'),'utf8').replace('/*__ONLINE_CONFIG__*/null',JSON.stringify(config));
 const meta=JSON.parse(fs.readFileSync(path.join(src,'meta.json'),'utf8'));meta.data.version=version;
 fs.writeFileSync(path.join(dir,'manifest.json'),JSON.stringify(manifest,null,2)+'\n');

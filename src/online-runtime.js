@@ -1,5 +1,5 @@
 // 自有适配代码；模型和官方 Spine 运行库从固定版本的上游加载。
-  const VERSION = '2.12.0';
+  const VERSION = '2.12.1';
   const profiles = {
     butter:{name:'黄油',file:'Butter',hashes:{'Butter.skel':'85e440de8537e3498ddf22e18edc7fbd33b8f24579641f9720e0d35b461ddbac','Butter.atlas':'1f8e468669e5ce3bef3f4c01726415de3e35fd7dd3afd778d2726d0e8b59e716','Butter.png':'dcf27898edcfdc63f075f603d282cc95582b9d22e2e94ddd7e2a6b667866f126'}},
     kommy:{name:'柯米',file:'Kommy',hashes:{'Kommy.skel':'c4c6905b80178a1ad6c5829ed7b1e1b730468d85804a00b5a51305b3828a315c','Kommy.atlas':'4cc2a2993d2a7f57788a54b48bfb05d72d5e048f997337a5077d0480b5a9800f','Kommy.png':'8a4e1fa41483ece760a971ea6ba09d1c7489dea7c5e516eb4af5b07bfe49f409'}},
@@ -21,7 +21,7 @@ async function createButterRuntime(env) {
   const LIB_HASH = spine41 ? 'bee9d7dbc36cb5c37f1f999e4b68e7f735ffd09c4b4ca667ae50fc7d4429aeff' : 'ed59374359cf9217a87723124f5e87665492b06dae04a7b5e83af0fd18b12db2';
   const MODEL_HASHES = profile.hashes;
   const doc = H.document;
-  let dead = false, active = false, raf = 0, panel = null, characterPanel = null, root = null, target = null;
+  let dead = false, active = false, displayOwned = false, raf = 0, panel = null, characterPanel = null, root = null, target = null;
   let gesture = null, phase = 'idle', clip = 'Idle_1', elapsed = 0, queue = [], rebounding = null;
   let pose = '', mode = '', task = '', focused = true, lastFrame = 0, lastRandom = '', nextRandom = 0;
   const history = [], disposers = [];
@@ -46,6 +46,7 @@ async function createButterRuntime(env) {
   const renderer = new S.SceneRenderer(canvas, context);
   const assets = new S.AssetManager(context, MODEL);
   let skeleton, state, data, base, head, controls, viewBounds, poseBounds;
+  const fullExtent = {x:0,y:0};
   function updateWorld(poseOnly=false) {
     if(spine41)skeleton.updateWorldTransform();
     else skeleton.updateWorldTransform(poseOnly?S.Physics.pose:S.Physics.update);
@@ -441,9 +442,7 @@ async function createButterRuntime(env) {
     startQueuedInput(now);
     if(!peek&&!blocked&&(['pressed','holding','finishing','rebound','result','random'].includes(phase)||phase==='task'&&task!=='working'))freezeMotion();else unlockMotion(root);
     const dpr = Math.min(H.devicePixelRatio || 1,3);
-    const w = Math.max(1,Math.round(target.clientWidth*dpr)), h = Math.max(1,Math.round(target.clientHeight*dpr));
-    if (canvas.width !== w || canvas.height !== h) { canvas.width=w; canvas.height=h; }
-    const gl = context.gl; gl.viewport(0,0,w,h); gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT);
+    let w = Math.max(1,Math.round(target.clientWidth*dpr)), h = Math.max(1,Math.round(target.clientHeight*dpr));
     const edge = peek ? ['bottom','top','left','right'].find(x=>target.classList.contains('is-'+x)) || 'bottom' : 'bottom';
     canvas.style.transform = root.__butterMotionLock?.owner===controller?root.__butterMotionLock.mirror:!peek && root.querySelector('.is-flipped') ? 'scaleX(-1)' : '';
     const hidden = [];
@@ -465,9 +464,21 @@ async function createButterRuntime(env) {
       const full = { x:Math.min(base.x,poseBounds.x), y:Math.min(base.y,poseBounds.y) };
       full.width = Math.max(base.x+base.width,poseBounds.x+poseBounds.width)-full.x;
       full.height = Math.max(base.y+base.height,poseBounds.y+poseBounds.height)-full.y;
-      const bounds = peek ? head : full, rotated = peek && (edge === 'left' || edge === 'right');
+      const bounds = peek ? head : makasha ? base : full, rotated = peek && (edge === 'left' || edge === 'right');
       const margin = peek ? 1.04 : 1.12;
       const scale = Math.max((rotated ? bounds.height : bounds.width)/w,(rotated ? bounds.width : bounds.height)/h)*margin;
+      if(makasha&&!peek){
+        // 全身固定待机比例和中心；伸展的长杵/头发通过扩大透明画布容纳，不再拉远镜头。
+        const cx=base.x+base.width/2,cy=base.y+base.height/2;
+        fullExtent.x=Math.max(fullExtent.x,Math.abs(poseBounds.x-cx),Math.abs(poseBounds.x+poseBounds.width-cx));
+        fullExtent.y=Math.max(fullExtent.y,Math.abs(poseBounds.y-cy),Math.abs(poseBounds.y+poseBounds.height-cy));
+        const expand=(pixels,extent)=>2*extent/scale+4>pixels?Math.ceil((2*extent/scale+4)/64)*64:pixels;
+        w=expand(w,fullExtent.x);h=expand(h,fullExtent.y);
+        canvas.style.width=w/dpr+'px';canvas.style.height=h/dpr+'px';
+        canvas.style.left=(target.clientWidth-w/dpr)/2+'px';canvas.style.top=(target.clientHeight-h/dpr)/2+'px';
+      }else{canvas.style.width='100%';canvas.style.height='100%';canvas.style.left='0';canvas.style.top='0';}
+      if (canvas.width !== w || canvas.height !== h) { canvas.width=w; canvas.height=h; }
+      const gl = context.gl; gl.viewport(0,0,w,h); gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT);
       renderer.camera.setViewport(w*scale,h*scale);
       renderer.camera.position.set(bounds.x+bounds.width/2,peek ? bounds.y+(rotated ? w : h)*scale/2 : bounds.y+bounds.height/2,0);
       renderer.camera.up.set(edge==='left' ? -1 : edge==='right' ? 1 : 0,edge==='top' ? -1 : (edge==='bottom' ? 1 : 0),0); renderer.camera.update();
@@ -560,6 +571,7 @@ async function createButterRuntime(env) {
   const controller = {
     version:VERSION, character, characterName, migrateLegacy, setSize, showSizePanel, showCharacterPanel, restoreSize,
     isActive:()=>active&&!dead,
+    relinquishDisplay:()=>{displayOwned=false;},
     selectCharacter:id=>env.selectCharacter?.(id),
     busy:()=>!!gesture || !!pendingAction || ['rebound','result','finishing','holding','pressed'].includes(phase),
     status:()=>({version:VERSION,character,characterName,characters:createButterRuntime.describe().characters,applied:active && !!target,clip,phase,pose,task,interaction,hitAreas,walking,walkDistance,positionLocked:root?.__butterMotionLock?.owner===controller,feet:feet.map((b,i)=>({x:b.x,y:b.y,rotation:b.rotation,animationX:footPose[i]?.x,animationY:footPose[i]?.y,animationRotation:footPose[i]?.rotation})),history:[...history],size:api()?.getAppearance().size,animations:data.animations.map(x=>({name:x.name,duration:x.duration})),bone:controls[0].x,controls:controls.map(b=>({name:b.data.name,x:b.x,y:b.y,setupX:b.data.x,setupY:b.data.y})),control:{x:controls[0].x,y:controls[0].y,setupX:controls[0].data.x,setupY:controls[0].data.y},viewBounds,poseBounds}),
@@ -576,13 +588,14 @@ async function createButterRuntime(env) {
       listen(H,'blur',()=>{focused=false;gesture=null;clearQueuedInput();rest();});listen(H,'focus',()=>{focused=true;planRandom();});
       listen(doc,'visibilitychange',()=>{if(doc.hidden){gesture=null;clearQueuedInput();rest();}else planRandom();});
       listen(canvas,'webglcontextlost',e=>{e.preventDefault();notify('绘图上下文已丢失，请从角色菜单重新启用。','warning');controller.destroy();});
-      H.ButterDatabasePet=controller; raf=H.requestAnimationFrame(tick);
+      H.ButterDatabasePet?.relinquishDisplay?.();H.ButterDatabasePet=controller;displayOwned=true;raf=H.requestAnimationFrame(tick);
     },
     destroy() {
       if(dead)return;
-      const ownsDisplay=active&&H.ButterDatabasePet===controller;
-      dead=true;active=false;
+      const ownsDisplay=active&&displayOwned;
+      dead=true;active=false;displayOwned=false;
       // 新版本已接管时旧实例只清理自己；真正停用时恢复仍属于本脚本的尺寸。
+      // 酒馆助手可能先清理父窗口全局变量，不能用那个变量是否还存在来判断尺寸所有权。
       if(ownsDisplay&&!sizeRestored)try{restoreSize({fallback:false});}catch(e){notify('已恢复原图，但尺寸还原失败，恢复记录已保留：'+e.message,'error');}
       H.cancelAnimationFrame(raf);gesture=null;queue=[];taskHold=null;clearQueuedInput();disposers.splice(0).forEach(fn=>fn());restoreHint(root);unlockMotion(root,true);clearMotionRelease(root);hoverPoint=null;unmount();css.remove();panel?.remove();panel=null;characterPanel?.remove();characterPanel=null;signal.removeEventListener('abort',abortLoad);disposeGraphics();
       if(H.ButterDatabasePet===controller)delete H.ButterDatabasePet;

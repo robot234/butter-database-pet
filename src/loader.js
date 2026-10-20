@@ -7,7 +7,7 @@
   const KEY='__BUTTER_DATABASE_PET_V2__';H[KEY]?.destroy();
   let stopped=false,suspended=false,epoch=0,current=null,staged=null,loading=null,loadAbort=null,frameObserver=null,controlPanel=null,renderControlPanel=null;
   const CACHE_DB='butter-database-pet:browser-cache:v1',ACTIVE_KEY=(CONFIG.localPreview?'preview-active:':'active:')+CONFIG.base,CATALOG_KEY=(CONFIG.localPreview?'preview-characters:':'characters:')+CONFIG.base,CHARACTER_KEY='butter-database-pet:selected-character:'+(CONFIG.localPreview?'preview:v1':'v1');
-  let characters=checkCharacters(CONFIG.characters),catalogManifest=checkManifest(CONFIG.initial),catalogReady=null,catalogLoading=null,activeRecord=null;
+  let characters=checkCharacters(CONFIG.characters),catalogManifest=checkManifest(CONFIG.initial),catalogReady=null,catalogLoading=null,catalogAbort=null,activeRecord=null,cacheClearing=null;
   const defaultCharacter=list=>CONFIG.localPreview&&list.some(p=>p.id==='youngchun')?'youngchun':list[0].id;
   let selectedCharacter=defaultCharacter(characters),savedCharacter=null,currentManifest=null;
   try{savedCharacter=H.localStorage.getItem(CHARACTER_KEY);}catch(_){}
@@ -56,8 +56,8 @@
       }catch(_){warnCache();finish(null);}
     });return cacheOpen;
   }
-  async function cacheOp(mode,action){
-    const db=await openCache();if(!db)return null;
+  async function cacheOp(mode,action,generation=epoch){
+    const db=await openCache();if(!db||mode==='readwrite'&&(generation!==epoch||cacheClearing||stopped))return null;
     return new Promise(resolve=>{
       let tx,request,finished=false;
       const finish=value=>{if(finished)return;finished=true;H.clearTimeout(timer);resolve(value);};
@@ -65,6 +65,32 @@
       const timer=H.setTimeout(()=>{try{tx?.abort();}catch(_){}fail();},4000);
       try{tx=db.transaction('entries',mode);request=action(tx.objectStore('entries'));tx.oncomplete=()=>finish(request?.result??null);tx.onabort=tx.onerror=fail;}catch(_){fail();}
     });
+  }
+  async function clearDownloadStore(){
+    const db=await openCache();if(!db)throw new Error('浏览器缓存不可用，未能完成清理。');
+    return new Promise((resolve,reject)=>{
+      let tx,finished=false;
+      const finish=error=>{if(finished)return;finished=true;H.clearTimeout(timer);error?reject(error):resolve();};
+      const timer=H.setTimeout(()=>{try{tx?.abort();}catch(_){}finish(new Error('清理缓存超时，请稍后重试。'));},4000);
+      try{tx=db.transaction('entries','readwrite');tx.oncomplete=()=>finish();tx.onerror=tx.onabort=()=>finish(new Error('清理缓存失败，请稍后重试。'));tx.objectStore('entries').clear();}
+      catch(error){try{tx?.abort();}catch(_){}finish(error);}
+    });
+  }
+  function clearCache(){
+    if(stopped)return Promise.resolve(false);
+    if(cacheClearing)return cacheClearing;
+    const pending=[loading,catalogLoading,catalogReady].filter(Boolean);
+    cacheClearing=Promise.resolve().then(async()=>{
+      epoch++;catalogAbort?.abort();loadAbort?.abort();staged?.destroy();staged=null;
+      notify('正在清除桌宠下载缓存，当前人物和设置保留。');
+      try{
+        await Promise.allSettled(pending);if(stopped)return false;
+        await clearDownloadStore();if(stopped)return false;
+        activeRecord=null;catalogReady=Promise.resolve();cacheWarning=false;
+        notify('桌宠缓存已清除；当前人物继续显示，下次重新加载或切换人物时按需下载。','success');return true;
+      }catch(error){if(!stopped)notify('桌宠缓存未清除：'+error.message,'error');return false;}
+      finally{cacheClearing=null;renderControlPanel?.();}
+    });renderControlPanel?.();return cacheClearing;
   }
   async function fetchBytes(url,signal){
     const stop=new AbortController(),cancel=()=>stop.abort();signal.addEventListener('abort',cancel,{once:true});
@@ -146,19 +172,20 @@
     return {factory,characters:list};
   }
   function refreshCharacters(){
-    if(stopped)return Promise.resolve(false);
+    if(stopped||cacheClearing)return Promise.resolve(false);
     if(CONFIG.localPreview){notify('本地包使用自带人物名单；在线新增人物请使用在线版。');return Promise.resolve(false);}
     if(catalogLoading)return catalogLoading;
+    const request=new AbortController(),generation=epoch;catalogAbort=request;
     catalogLoading=Promise.resolve().then(async()=>{
       try{
         await hydrateCharacters();
-        const m=checkManifest(JSON.parse(await fetchText(CONFIG.base+'manifest.json',abort.signal)));
+        const m=checkManifest(JSON.parse(await fetchText(CONFIG.base+'manifest.json',request.signal)));
         if(newer(catalogManifest.version,m.version)){notify('在线版本较旧，保留现有人物名单和当前画面。');return true;}
-        const next=await readRuntime(m,abort.signal);if(stopped)return false;
-        await cacheOp('readwrite',s=>s.put({schema:1,manifest:m,characters:next.characters},CATALOG_KEY));
-        if(stopped)return false;acceptCatalog(m,next.characters);return true;
-      }catch(e){if(!stopped)notify('在线人物读取失败，保留原名单和当前画面：'+e.message,'warning');return false;}
-      finally{catalogLoading=null;}
+        const next=await readRuntime(m,request.signal);if(stopped||generation!==epoch)return false;
+        await cacheOp('readwrite',s=>s.put({schema:1,manifest:m,characters:next.characters},CATALOG_KEY),generation);
+        if(stopped||generation!==epoch)return false;acceptCatalog(m,next.characters);return true;
+      }catch(e){if(!stopped&&generation===epoch)notify('在线人物读取失败，保留原名单和当前画面：'+e.message,'warning');return false;}
+      finally{catalogLoading=null;if(catalogAbort===request)catalogAbort=null;}
     });return catalogLoading;
   }
   function closeControlPanel(){controlPanel?.remove();controlPanel=null;renderControlPanel=null;}
@@ -173,10 +200,11 @@
     const message=doc.createElement('p');message.setAttribute('role','status');let panelBusy=false;
     const applied=id=>!suspended&&current?.character===id&&current.status().applied;
     const refresh=doc.createElement('button');refresh.type='button';refresh.textContent='刷新在线人物';refresh.style.margin='8px 8px 0 0';refresh.hidden=!!CONFIG.localPreview;
+    const clear=doc.createElement('button');clear.type='button';clear.textContent='清除桌宠缓存';clear.style.margin='8px 8px 0 0';clear.title='清除本桌宠的下载缓存；保留当前画面、角色选择和大小，下次重新加载时下载。';
     renderControlPanel=()=>{
-      if(controlPanel!==node)return;list.replaceChildren();refresh.disabled=panelBusy;
+      if(controlPanel!==node)return;list.replaceChildren();const busy=panelBusy||!!cacheClearing;refresh.disabled=busy;clear.disabled=busy;
       for(const {id,name}of characters){
-        const button=doc.createElement('button');button.type='button';button.textContent=name+(applied(id)?'（当前）':'');button.disabled=panelBusy||!!applied(id);button.style.margin='8px 8px 0 0';
+        const button=doc.createElement('button');button.type='button';button.textContent=name+(applied(id)?'（当前）':'');button.disabled=busy||!!applied(id);button.style.margin='8px 8px 0 0';
         button.onclick=async()=>{panelBusy=true;renderControlPanel?.();message.textContent='正在准备'+name+'，已有互动会完整播放后再切换。';
           try{if(await controller.selectCharacter(id)){if(controlPanel===node)closeControlPanel();}else if(controlPanel===node)message.textContent='暂未启用，请查看提示后重试；当前画面保留。';}
           catch(error){if(controlPanel===node)message.textContent='启用失败：'+error.message;}
@@ -187,7 +215,8 @@
     refresh.onclick=async()=>{panelBusy=true;renderControlPanel?.();message.textContent='正在读取在线人物，当前角色继续运行。';
       const ok=await refreshCharacters();panelBusy=false;if(controlPanel===node){message.textContent=ok?'人物名单已就绪，选择角色即可切换。':'读取失败，原名单和当前画面已保留，可稍后重试。';renderControlPanel?.();}
     };
-    node.append(message,refresh);const close=doc.createElement('button');close.type='button';close.textContent='关闭';close.style.margin='8px 8px 0 0';close.onclick=closeControlPanel;node.oncancel=closeControlPanel;node.append(close);doc.body.append(node);controlPanel=node;renderControlPanel();node.show();
+    clear.onclick=async()=>{message.textContent='正在清除桌宠下载缓存，当前画面与设置保留。';const ok=await clearCache();if(controlPanel===node)message.textContent=ok?'缓存已清除；下次重新加载或切换人物时按需下载。':'未完成清理，请查看提示后重试。';};
+    node.append(message,refresh,clear);const close=doc.createElement('button');close.type='button';close.textContent='关闭';close.style.margin='8px 8px 0 0';close.onclick=closeControlPanel;node.oncancel=closeControlPanel;node.append(close);doc.body.append(node);controlPanel=node;renderControlPanel();node.show();
     hydrateCharacters().then(()=>{if(controlPanel===node)renderControlPanel?.();});
   }
   function pause(ms){return new Promise(resolve=>{const finish=()=>{H.clearTimeout(timer);abort.signal.removeEventListener('abort',finish);resolve();};const timer=H.setTimeout(finish,ms);abort.signal.addEventListener('abort',finish,{once:true});if(abort.signal.aborted)finish();});}
@@ -206,12 +235,14 @@
     const previous=current;
     try{prepared.activate();}catch(e){prepared.destroy();throw e;}
     current=prepared;currentManifest=m;selectedCharacter=prepared.character||character;staged=null;previous?.destroy();
+    if(loadAbort===request)loadAbort=null;
     try{H.localStorage.setItem(CHARACTER_KEY,selectedCharacter);}catch(_){notify('角色已切换，但浏览器未能记住选择；下次启动可能回到默认角色。','warning');}
     // 只有新实例完整加载并接管成功，才更新下次启动使用的版本；坏更新不会污染已用版本。
     activeRecord={schema:1,manifest:m,characters:nextCharacters};const accepted=acceptCatalog(m,nextCharacters);
     await cacheOp('readwrite',store=>{const saved=store.put(activeRecord,ACTIVE_KEY);return accepted?store.put(activeRecord,CATALOG_KEY):saved;});return true;
   }
   async function run(force=false,character){
+    if(cacheClearing)return false;
     if(force&&CONFIG.localPreview){notify('这是咏春本地预览版，尚未发布在线更新。','info');return false;}
     if(suspended){if(force)notify('当前显示数据库原图，从“选择桌宠角色”可重新启用。');return false;}
     if(stopped||loading)return loading;
@@ -238,8 +269,8 @@
       finally{loading=null;}
     });return loading;
   }
-  const controller={showCharacterPanel,refreshCharacters,checkUpdate:()=>run(true),async apply(){if(stopped)return;const generation=epoch;suspended=false;if(loading)await loading;if(!stopped&&!suspended&&generation===epoch)return run();},restore(){if(stopped)return;closeControlPanel();suspended=true;epoch++;loadAbort?.abort();staged?.destroy();current?.destroy();staged=null;current=null;notify('已恢复数据库原图；可从角色菜单重新启用。','success');},status:()=>({...current?.status()||{applied:false,loading:!!loading,suspended},characters:characters.map(p=>({...p})),selectedCharacter,characterCatalogVersion:catalogManifest.version,catalogRefreshing:!!catalogLoading,cacheSource:loadSource,cacheAvailable:!!cacheDb&&!cacheWarning}),destroy(){if(stopped)return;closeControlPanel();stopped=true;epoch++;abort.abort();loadAbort?.abort();staged?.destroy();current?.destroy();staged=null;current=null;cacheDb?.close();cacheDb=null;frameObserver?.disconnect();buttonStops.splice(0).forEach(fn=>fn());owner.removeEventListener('pagehide',pagehide);if(H[KEY]===controller)delete H[KEY];}};
-  controller.selectCharacter=async id=>{const generation=epoch;await hydrateCharacters();if(catalogLoading)await catalogLoading;while(loading){const pending=loading;await pending;if(loading===pending)loading=null;}if(stopped||generation!==epoch)return false;if(!characters.some(p=>p.id===id)){notify('不支持的桌宠角色，请先刷新在线人物。','error');return false;}suspended=false;return run(false,id);};
+  const controller={showCharacterPanel,refreshCharacters,clearCache,checkUpdate:()=>run(true),async apply(){if(stopped||cacheClearing)return;const generation=epoch;suspended=false;if(loading)await loading;if(!stopped&&!suspended&&generation===epoch)return run();},restore(){if(stopped)return;closeControlPanel();suspended=true;epoch++;loadAbort?.abort();staged?.destroy();current?.destroy();staged=null;current=null;notify('已恢复数据库原图；可从角色菜单重新启用。','success');},status:()=>({...current?.status()||{applied:false,loading:!!loading,suspended},characters:characters.map(p=>({...p})),selectedCharacter,characterCatalogVersion:catalogManifest.version,catalogRefreshing:!!catalogLoading,cacheClearing:!!cacheClearing,cacheSource:loadSource,cacheAvailable:!!cacheDb&&!cacheWarning}),destroy(){if(stopped)return;closeControlPanel();stopped=true;epoch++;abort.abort();catalogAbort?.abort();loadAbort?.abort();staged?.destroy();current?.destroy();staged=null;current=null;cacheDb?.close();cacheDb=null;frameObserver?.disconnect();buttonStops.splice(0).forEach(fn=>fn());owner.removeEventListener('pagehide',pagehide);if(H[KEY]===controller)delete H[KEY];}};
+  controller.selectCharacter=async id=>{if(stopped||cacheClearing)return false;const generation=epoch;await hydrateCharacters();if(catalogLoading)await catalogLoading;while(loading){const pending=loading;await pending;if(loading===pending)loading=null;}if(stopped||cacheClearing||generation!==epoch)return false;if(!characters.some(p=>p.id===id)){notify('不支持的桌宠角色，请先刷新在线人物。','error');return false;}suspended=false;return run(false,id);};
   const pagehide=()=>controller.destroy();owner.addEventListener('pagehide',pagehide);
   H[KEY]=controller;
   const ownFrame=owner.frameElement;
@@ -247,7 +278,7 @@
   const event=typeof getButtonEvent==='function'?getButtonEvent:TH.getButtonEvent;
   const on=typeof eventOn==='function'?eventOn:TH.eventOn;
   const off=typeof eventRemoveListener==='function'?eventRemoveListener:TH.eventRemoveListener;
-  if(event&&on)for(const [name,fn]of [['选择桌宠角色',showCharacterPanel],['检查在线更新',()=>run(true)],['恢复数据库原图',()=>controller.restore()],['调整桌宠大小',()=>current?.showSizePanel()]]){const nameEvent=event(name),sub=on(nameEvent,fn);if(sub?.stop)buttonStops.push(()=>sub.stop());else if(off)buttonStops.push(()=>off(nameEvent,fn));}
+  if(event&&on)for(const [name,fn]of [['选择桌宠角色',showCharacterPanel],['检查在线更新',()=>run(true)],['恢复数据库原图',()=>controller.restore()],['调整桌宠大小',()=>current?.showSizePanel()],['清除桌宠缓存',clearCache]]){const nameEvent=event(name),sub=on(nameEvent,fn);if(sub?.stop)buttonStops.push(()=>sub.stop());else if(off)buttonStops.push(()=>off(nameEvent,fn));}
   // 缓存命中时启动/再次应用不访问网络；只在手动检查更新或缓存缺失时下载。
   run();
 })();

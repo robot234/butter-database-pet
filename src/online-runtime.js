@@ -1,5 +1,5 @@
 // 自有适配代码；模型和官方 Spine 运行库从固定版本的上游加载。
-  const VERSION = '2.11.1';
+  const VERSION = '2.12.0';
   const profiles = {
     butter:{name:'黄油',file:'Butter',hashes:{'Butter.skel':'85e440de8537e3498ddf22e18edc7fbd33b8f24579641f9720e0d35b461ddbac','Butter.atlas':'1f8e468669e5ce3bef3f4c01726415de3e35fd7dd3afd778d2726d0e8b59e716','Butter.png':'dcf27898edcfdc63f075f603d282cc95582b9d22e2e94ddd7e2a6b667866f126'}},
     kommy:{name:'柯米',file:'Kommy',hashes:{'Kommy.skel':'c4c6905b80178a1ad6c5829ed7b1e1b730468d85804a00b5a51305b3828a315c','Kommy.atlas':'4cc2a2993d2a7f57788a54b48bfb05d72d5e048f997337a5077d0480b5a9800f','Kommy.png':'8a4e1fa41483ece760a971ea6ba09d1c7489dea7c5e516eb4af5b07bfe49f409'}},

@@ -1,20 +1,21 @@
 // 自有适配代码；模型和官方 Spine 运行库从固定版本的上游加载。
-  const VERSION = '2.10.0';
+  const VERSION = '2.11.0';
   const profiles = {
     butter:{name:'黄油',file:'Butter',hashes:{'Butter.skel':'85e440de8537e3498ddf22e18edc7fbd33b8f24579641f9720e0d35b461ddbac','Butter.atlas':'1f8e468669e5ce3bef3f4c01726415de3e35fd7dd3afd778d2726d0e8b59e716','Butter.png':'dcf27898edcfdc63f075f603d282cc95582b9d22e2e94ddd7e2a6b667866f126'}},
     kommy:{name:'柯米',file:'Kommy',hashes:{'Kommy.skel':'c4c6905b80178a1ad6c5829ed7b1e1b730468d85804a00b5a51305b3828a315c','Kommy.atlas':'4cc2a2993d2a7f57788a54b48bfb05d72d5e048f997337a5077d0480b5a9800f','Kommy.png':'8a4e1fa41483ece760a971ea6ba09d1c7489dea7c5e516eb4af5b07bfe49f409'}},
     youngchun:{name:'咏春',file:'Youngchun',model:'https://raw.githubusercontent.com/robot234/butter-database-pet/6f9c1afab0390814573e8d74c2d923452d355561/assets/youngchun/',hashes:{'Youngchun.skel.bytes':'44572de1172872fda71178bd8b2b8951a4ede21060e48a64622234ee100fb944','Youngchun.atlas.txt':'bf5f605e8e056af0ad6e7cad632ea01526631f4e2e259dcd9885bb44f37eec7e','Youngchun.png':'f1072f5cac73bafcdfac32c8937bc89b9e62b3468e2dbade684688489ac9bd6a'}},
-    sherum:{name:'夏乐',file:'Sherum',model:'https://raw.githubusercontent.com/robot234/butter-database-pet/9c64abd478e5f59bcd6e5200cb54846660dfb192/assets/sherum/',hashes:{'Sherum.skel.bytes':'9a838a28860c6b71da777459ada91b35420314c5a111b367685fc381d85317ae','Sherum.atlas.txt':'079fbd4cb3172067aee40c20691404cab5e1d7fbadcc120ae34b9b4109d36d6f','Sherum.png':'d65c2c79e0d0de8a298161f55f79f65c055a2fdd48994c2b8ade0dbda1d7500e'}}
+    sherum:{name:'夏乐',file:'Sherum',model:'https://raw.githubusercontent.com/robot234/butter-database-pet/9c64abd478e5f59bcd6e5200cb54846660dfb192/assets/sherum/',hashes:{'Sherum.skel.bytes':'9a838a28860c6b71da777459ada91b35420314c5a111b367685fc381d85317ae','Sherum.atlas.txt':'079fbd4cb3172067aee40c20691404cab5e1d7fbadcc120ae34b9b4109d36d6f','Sherum.png':'d65c2c79e0d0de8a298161f55f79f65c055a2fdd48994c2b8ade0dbda1d7500e'}},
+    makasha:{name:'玛卡莎',file:'Makasha',model:'https://raw.githubusercontent.com/robot234/butter-database-pet/b3261d3b113b1e01e5eeab53fc900b8d33aa764e/assets/makasha/',hashes:{'Makasha.skel.bytes':'f85a065ef7066fb2cd4569c2012bedf9190369eef4b704ceb6479e782805cb2a','Makasha.atlas.txt':'a7c3a08188c50b0eb518657f7323bb15ee69a7fd360acdc87f761ab7ef763ac6','Makasha.png':'161cff1cd675686ca2bb1d895b6f4e95913f114c51a16dab7b26185ffc5c4ce3'}}
   };
 async function createButterRuntime(env) {
   'use strict';
   const { host: H, owner, signal, sha256, fetchText, fetchAsset, notify, legacyHashes } = env;
   const character = env.character || 'butter', profile = Object.hasOwn(profiles,character) && profiles[character];
   if(!profile)throw new Error('不支持的桌宠角色：'+character);
-  const kommy = character === 'kommy', youngchun = character === 'youngchun', sherum = character === 'sherum', spine41 = youngchun || sherum, characterName = profile.name;
-  const faceSlots=sherum?/^Face_Line$/:youngchun?/^Faceline$/:kommy?/^S1_F_Faceline$/:/S1_Faceline/;
-  const bodySlots=spine41?/^Body$/:/^S1_Body$/;
-  const hairSlots=sherum?/^(Hair_F_[12](?:_Color|_Line)?|Hat_F)$/:youngchun?/^Hair_Front_[1-6]$/:/^S1_Hair_[1-7]$/;
+  const kommy = character === 'kommy', youngchun = character === 'youngchun', sherum = character === 'sherum', makasha = character === 'makasha', spine41 = youngchun || sherum || makasha, characterName = profile.name;
+  const faceSlots=sherum||makasha?/^Face_Line$/:youngchun?/^Faceline$/:kommy?/^S1_F_Faceline$/:/S1_Faceline/;
+  const bodySlots=makasha?/^(Vest_Color|Dress_Upper)$/:spine41?/^Body$/:/^S1_Body$/;
+  const hairSlots=makasha?/^(Hair_Top_|Point_Hair_F$|Head_B$)/:sherum?/^(Hair_F_[12](?:_Color|_Line)?|Hat_F)$/:youngchun?/^Hair_Front_[1-6]$/:/^S1_Hair_[1-7]$/;
   const MODEL = profile.model || 'https://raw.githubusercontent.com/tenebo/Trickcal-Desktop/1b7e15bf5d520ac2908f3cf7b7cf226f5aae6907/Assets/spine/'+character+'/';
   const LIB = 'https://cdn.jsdelivr.net/npm/@esotericsoftware/spine-webgl@'+(spine41?'4.1.56':'4.2.109')+'/dist/iife/spine-webgl.js';
   const LIB_HASH = spine41 ? 'bee9d7dbc36cb5c37f1f999e4b68e7f735ffd09c4b4ca667ae50fc7d4429aeff' : 'ed59374359cf9217a87723124f5e87665492b06dae04a7b5e83af0fd18b12db2';
@@ -79,12 +80,12 @@ async function createButterRuntime(env) {
     data = new S.SkeletonBinary(new S.AtlasAttachmentLoader(atlas)).readSkeletonData(binary);
     skeleton = new S.Skeleton(data); skeleton.setSkinByName('Normal'); skeleton.setSlotsToSetupPose();
     state = new S.AnimationState(new S.AnimationStateData(data)); state.data.defaultMix = 0.12;
-    for (const name of ['Idle_1','Pat_Idle','Pat_End','Touch_Idle','Touch_End','Tickle_Idle_1','Tickle_Idle_2','Tickle_End',...(sherum?['Write_1','Write_2','Write_3','Panic_1','Happy_2','Dance_1']:youngchun?['Count_1','Panic_1','Victory_1']:kommy?['Tired_1','Scream_1','Melong_1','Sleepy_1']:['Proud_1','Dizzy_1','Taunt_1'])]) {
+    for (const name of ['Idle_1','Pat_Idle','Pat_End','Touch_Idle','Touch_End','Tickle_Idle_1','Tickle_Idle_2','Tickle_End',...(makasha?['Thinking_1','Thinking_2','Thinking_3','Panic_1','Groggy_1','Happy_2','Dance_1']:sherum?['Write_1','Write_2','Write_3','Panic_1','Happy_2','Dance_1']:youngchun?['Count_1','Panic_1','Victory_1']:kommy?['Tired_1','Scream_1','Melong_1','Sleepy_1']:['Proud_1','Dizzy_1','Taunt_1'])]) {
       if (!data.findAnimation(name)) throw new Error('模型缺少动作：' + name);
     }
     for (const name of ['Character_Ball_Move','Character_Pat']) if (!skeleton.findBone(name)) throw new Error('模型缺少互动骨骼：' + name);
     controls = ['Character_Ball_Move','Character_Pat'].map(name=>skeleton.findBone(name));
-    feet = (sherum?['Leg_R_IK','Leg_L_IK']:youngchun?['Leg_R_Down_0','Leg_L_Down_0']:['S1_Leg_IK_R','S1_Leg_IK_L']).map(name=>skeleton.findBone(name));
+    feet = (sherum||makasha?['Leg_R_IK','Leg_L_IK']:youngchun?['Leg_R_Down_0','Leg_L_Down_0']:['S1_Leg_IK_R','S1_Leg_IK_L']).map(name=>skeleton.findBone(name));
     if (feet.some(b=>!b)) throw new Error('模型缺少迈步控制骨骼。');
     state.setAnimation(0, 'Idle_1', true); state.apply(skeleton); updateWorld();
     base = skeleton.getBoundsRect();
@@ -142,20 +143,22 @@ async function createButterRuntime(env) {
   }
   function rest() { unlockMotion(root);queue = []; rebounding = null; mode = ''; interaction = ''; play('Idle_1', true, 'idle'); planRandom(); }
   function sequence(names) { queue = names.slice(1); play(names[0], false, 'result'); }
-  const randomClips = (sherum?['Idle_2','Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Read_1','Read_2','Read_3','Write_1','Write_2','Write_3','Write_4','Write_5','Question_1','Shy_1','Shy_2','Dance_1','Dance_2','Eat_1','Eat_2','Blank_1','Blank_2']:youngchun?['Idle_2','Idle_3','Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Happy_7','Curious_1','Curious_2','Smile_1_1','Smile_2','Smile_3','Innocent_1','Rest_1','Rest_2','Tired_1','Eat_1','Eat_2']:kommy?['Idle_2','Taunt_1','Melong_1','Melong_2','Melong_3','Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Happy_7','Sleepy_1','Tired_1','Tired_2','Tired_3','Eat_1','Eat_2']:['Smell_1','Taunt_1','Taunt_2','Taunt_3','Taunt_4','Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Proud_1','Proud_2','Eat_1','Eat_2']).filter(name=>data.findAnimation(name));
+  const randomClips = (makasha?['Idle_2','Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Happy_7','Happy_8','Calm_1','Calm_2','Calm_3','Calm_4','Serious_1','Serious_2','Serious_3','Serious_4','Serious_5','Serious_6','Thinking_1','Thinking_2','Thinking_3','Dance_1','Dance_2','Eat_1','Eat_2']:sherum?['Idle_2','Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Read_1','Read_2','Read_3','Write_1','Write_2','Write_3','Write_4','Write_5','Question_1','Shy_1','Shy_2','Dance_1','Dance_2','Eat_1','Eat_2','Blank_1','Blank_2']:youngchun?['Idle_2','Idle_3','Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Happy_7','Curious_1','Curious_2','Smile_1_1','Smile_2','Smile_3','Innocent_1','Rest_1','Rest_2','Tired_1','Eat_1','Eat_2']:kommy?['Idle_2','Taunt_1','Melong_1','Melong_2','Melong_3','Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Happy_7','Sleepy_1','Tired_1','Tired_2','Tired_3','Eat_1','Eat_2']:['Smell_1','Taunt_1','Taunt_2','Taunt_3','Taunt_4','Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Proud_1','Proud_2','Eat_1','Eat_2']).filter(name=>data.findAnimation(name));
   const poses = { idle:'Idle_1', blink:'Close_1','look-left':'Serious_1','look-right':'Serious_2','walk-a':'Idle_1','walk-b':'Idle_1',roll:'Dizzy_1','eat-a':'Eat_1','eat-b':'Eat_2',yawn:'Close_1',snore:'Close_1','sit-snore':'Close_1',working:'Proud_1',struggle:'Panic_1',shy:'Panic_2',angry:'Angry_1',happy:'Happy_1',dizzy:'Dizzy_1',surprised:'Surprise_1',wave:'Happy_3',huff:'Angry_2',pound:'Smash_End_1',knockdown:'Smash_End_2' };
   if(kommy)Object.assign(poses,{'look-left':'Sleepy_1','look-right':'Tired_1',roll:'Tired_2',yawn:'Sleepy_1',snore:'Sleepy_1','sit-snore':'Sleepy_1',working:'Tired_1',struggle:'Scream_1',shy:'Surprise_2',dizzy:'Tired_3'});
   if(youngchun)Object.assign(poses,{roll:'Tired_1',yawn:'Tired_1',working:'Count_1',struggle:'Panic_1',dizzy:'Panic_2'});
   if(sherum)Object.assign(poses,{'look-left':'Read_1','look-right':'Question_1',roll:'Blank_1',working:'Write_1',struggle:'Panic_1',shy:'Shy_1',dizzy:'Blank_2'});
+  if(makasha)Object.assign(poses,{roll:'Groggy_1',working:'Thinking_1',struggle:'Panic_1',shy:'Happy_6',dizzy:'Groggy_1',yawn:'Sleepy_1',snore:'Sleepy_1','sit-snore':'Sleepy_1'});
   const variants=new Map();
   function chooseVariant(group,names) { const available=names.filter(name=>data.findAnimation(name)),index=variants.get(group)||0;variants.set(group,index+1);return available[index%available.length]||'Idle_1'; }
-  const taskClips = sherum?{working:['Write_1','Write_2','Write_3'],error:['Panic_1','Sorry_1','Sad_3'],success:['Happy_2','Happy_3','Dance_1']}:youngchun?{working:['Count_1','Count_2','Robot_1'],error:['Panic_1','Sad_1','Sad_2'],success:['Victory_1','Happy_1','Happy_2']}:kommy?{working:['Tired_1','Tired_2','Tired_3'],error:['Scream_1','Surprise_3'],success:['Melong_1','Melong_2','Melong_3']}:{working:['Proud_1','Proud_2'],error:['Dizzy_1','Dizzy_2'],success:['Taunt_1','Taunt_3','Taunt_4']};
-  const faceClips=sherum?['Surprise_1','Surprise_2','Panic_1','Panic_2','Shy_1','Blank_1','Question_1']:youngchun?['Surprise_1','Surprise_2','Panic_1','Panic_2','Curious_1','Innocent_1','Sulky_1']:kommy?['Surprise_1','Surprise_2','Surprise_3','Taunt_1','Melong_1','Melong_2','Melong_3']:['Panic_2','Surprise_1','Panic_3','Taunt_2','Taunt_1','Taunt_3','Taunt_4'];
+  const taskClips = makasha?{working:['Thinking_1','Thinking_2','Thinking_3'],error:['Panic_1','Groggy_1','Sad_3'],success:['Happy_2','Happy_4','Dance_1']}:sherum?{working:['Write_1','Write_2','Write_3'],error:['Panic_1','Sorry_1','Sad_3'],success:['Happy_2','Happy_3','Dance_1']}:youngchun?{working:['Count_1','Count_2','Robot_1'],error:['Panic_1','Sad_1','Sad_2'],success:['Victory_1','Happy_1','Happy_2']}:kommy?{working:['Tired_1','Tired_2','Tired_3'],error:['Scream_1','Surprise_3'],success:['Melong_1','Melong_2','Melong_3']}:{working:['Proud_1','Proud_2'],error:['Dizzy_1','Dizzy_2'],success:['Taunt_1','Taunt_3','Taunt_4']};
+  const faceClips=makasha?['Panic_1','Panic_2','Panic_3','Panic_4','Panic_5','Blank_1','Happy_5']:sherum?['Surprise_1','Surprise_2','Panic_1','Panic_2','Shy_1','Blank_1','Question_1']:youngchun?['Surprise_1','Surprise_2','Panic_1','Panic_2','Curious_1','Innocent_1','Sulky_1']:kommy?['Surprise_1','Surprise_2','Surprise_3','Taunt_1','Melong_1','Melong_2','Melong_3']:['Panic_2','Surprise_1','Panic_3','Taunt_2','Taunt_1','Taunt_3','Taunt_4'];
   function nativeClip(p) {
     const groups={happy:['Happy_1','Happy_2','Happy_3','Happy_4','Happy_5'],wave:['Happy_1','Happy_2','Happy_3','Happy_4','Happy_5'],angry:['Angry_1','Angry_2','Angry_3'],shy:['Panic_2','Panic_3'],roll:['Dizzy_1','Dizzy_2'],dizzy:['Dizzy_1','Dizzy_2']};
     if(kommy)Object.assign(groups,{happy:['Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Happy_7'],wave:['Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Happy_7'],angry:['Angry_1','Angry_2','Angry_3','Angry_4','Angry_5'],shy:['Surprise_2','Surprise_3'],roll:['Tired_1','Tired_2','Tired_3'],dizzy:['Tired_1','Tired_2','Tired_3']});
     if(youngchun)Object.assign(groups,{happy:['Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Happy_7'],angry:['Angry_1','Angry_2','Angry_3','Angry_4','Angry_5','Angry_6','Angry_7','Angry_8','Angry_9'],roll:['Tired_1','Tired_2'],dizzy:['Panic_1','Panic_2']});
     if(sherum)Object.assign(groups,{happy:['Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6'],angry:['Angry_1','Angry_2','Angry_3','Angry_4','Angry_5','Angry_6'],shy:['Shy_1','Shy_2'],roll:['Blank_1','Blank_2'],dizzy:['Panic_1','Panic_2']});
+    if(makasha)Object.assign(groups,{happy:['Happy_1','Happy_2','Happy_3','Happy_4','Happy_5','Happy_6','Happy_7','Happy_8'],angry:['Angry_1','Angry_2','Angry_3','Angry_4','Angry_5','Angry_6'],shy:['Happy_5','Happy_6','Happy_7','Happy_8'],roll:['Blank_1','Blank_2','Blank_3','Blank_4'],dizzy:['Groggy_1','Panic_1']});
     return groups[p]?chooseVariant('native:'+p,groups[p]):poses[p]||'Idle_1';
   }
   const displayDuration=name=>Math.max(data.findAnimation(name).duration,/^(Taunt|Melong)_/.test(name)?3:0);
@@ -243,11 +246,11 @@ async function createButterRuntime(env) {
     delete node.__butterPetHint;
   }
   function updateHint(peek,p) {
-    const states=sherum?{working:'正在执行任务：写字记录',error:'任务失败：慌张、抱歉或难过',success:'任务成功：开心或跳舞'}:youngchun?{working:'正在执行任务：数数或机器人',error:'任务失败：慌张或难过',success:'任务成功：胜利或开心'}:kommy?{working:'正在执行任务：困困',error:'任务失败：惊叫或惊讶',success:'任务成功：吐舌头'}:{working:'正在执行任务：得意',error:'任务失败：晕晕',success:'任务成功：吐舌头'};
+    const states=makasha?{working:'正在执行任务：思考',error:'任务失败：慌张、迷糊或难过',success:'任务成功：开心或跳舞'}:sherum?{working:'正在执行任务：写字记录',error:'任务失败：慌张、抱歉或难过',success:'任务成功：开心或跳舞'}:youngchun?{working:'正在执行任务：数数或机器人',error:'任务失败：慌张或难过',success:'任务成功：胜利或开心'}:kommy?{working:'正在执行任务：困困',error:'任务失败：惊叫或惊讶',success:'任务成功：吐舌头'}:{working:'正在执行任务：得意',error:'任务失败：晕晕',success:'任务成功：吐舌头'};
     let text=peek?characterName+'：躲在边上偷看（悬停或点击唤出）':phase==='task'&&states[task]?characterName+'：'+states[task]+(task==='working'?'（拖动腿部/外围或拖动肚子可移动；互动点击等任务结束后接播）':''):'';
     if(!text){
       const labels={Pat:'摸头',Touch:phase==='rebound'?'薅脸回弹':'薅脸',Sad:'哭哭',Tickle:'挠痒',Smash:'敲头',Happy:'高兴',Angry:'生气',Proud:'得意',Dizzy:'晕晕',Taunt:kommy?'调皮':'吐舌头',Melong:'吐舌头',Tired:'困困',Sleepy:'打瞌睡',Scream:'惊叫',Eat:'嚼嚼',Smell:'嗅嗅',Panic:'小反应',Surprise:'惊讶',Close:'闭眼',Serious:'张望',Count:'数数',Robot:'机器人',Victory:'胜利',Curious:'好奇',Smile:'微笑',Innocent:'无辜',Sulky:'鼓脸',Rest:'休息'};
-      Object.assign(labels,{Write:'写字',Read:'读卷轴',Dance:'跳舞',Question:'疑惑',Sorry:'抱歉',Blank:'发懵',Shy:'害羞',Sulky:'闷闷不乐'});
+      Object.assign(labels,{Write:'写字',Read:'读卷轴',Dance:'跳舞',Question:'疑惑',Sorry:'抱歉',Blank:'发懵',Shy:'害羞',Sulky:'闷闷不乐',Thinking:'思考',Serious:'认真',Calm:'淡定',Groggy:'迷糊'});
       const reactions={Touch_End:'哭哭',Panic_2:'尴尬',Panic_3:'尴尬',Surprise_1:'惊讶',Taunt_2:'歪头'};
       const state=walking?'散步':['snore','sit-snore'].includes(p)?'睡觉':reactions[clip]||labels[clip.split('_')[0]]||'待机';
       const inside=hoverPoint&&root.getBoundingClientRect();
@@ -408,7 +411,7 @@ async function createButterRuntime(env) {
       if (phase === 'idle' || phase === 'native' || phase === 'task') {
         if (task) {play(selectedTaskClip, true, 'task');if(taskHold&&!taskHold.until)taskHold.until=now+3000;}
         else if (p === 'tickle' && !peek) sequence(['Tickle_Idle_1','Tickle_Idle_2','Tickle_End']);
-        else play(peek ? (/sleepy/.test(currentMode) ? (kommy?'Sleepy_1':'Close_1') : 'Idle_1') : nativeClip(p), true, p === 'idle' ? 'idle' : 'native');
+        else play(peek ? (/sleepy/.test(currentMode) ? (kommy||makasha?'Sleepy_1':'Close_1') : 'Idle_1') : nativeClip(p), true, p === 'idle' ? 'idle' : 'native');
       }
     }
     pose = p;
@@ -433,7 +436,7 @@ async function createButterRuntime(env) {
     if (rebounding) {
       const t = Math.min(1,elapsed/.32), amount = Math.exp(-5*t)*Math.cos(t*Math.PI*3)*(1-t);
       manipulate(rebounding.dx*amount,rebounding.dy*amount,'Character_Ball_Move');
-      if (t >= 1) { rebounding = null; sequence(['Touch_End',chooseVariant('cry',youngchun?['Sad_1','Sad_2','Sad_3','Sad_4','Sad_5','Sad_6','Sad_7']:kommy?['Sad_1','Sad_2','Sad_3','Sad_4','Sad_5']:['Sad_1','Sad_2','Sad_3','Sad_4'])]); }
+      if (t >= 1) { rebounding = null; sequence(['Touch_End',chooseVariant('cry',youngchun?['Sad_1','Sad_2','Sad_3','Sad_4','Sad_5','Sad_6','Sad_7']:kommy||makasha?['Sad_1','Sad_2','Sad_3','Sad_4','Sad_5']:['Sad_1','Sad_2','Sad_3','Sad_4'])]); }
     }
     startQueuedInput(now);
     if(!peek&&!blocked&&(['pressed','holding','finishing','rebound','result','random'].includes(phase)||phase==='task'&&task!=='working'))freezeMotion();else unlockMotion(root);
@@ -449,13 +452,14 @@ async function createButterRuntime(env) {
       const slot=skeleton.findSlot(name);if(slot){hidden.push([slot,slot.attachment]);slot.attachment=name.startsWith('Leg_Stand_')?skeleton.getAttachmentByName(name,name):null;}
     }
     if (peek) for (const slot of skeleton.slots) {
-      if (slot.attachment && !(sherum?/^(Hair_|Hat_|Horn$|Face_|Ball_|Eye_|E_|Mouth|Tear_)/:youngchun?/^(Hair_|Band_|Face|Ball_|Eye|Mouth|Tear_)/:/Hair|Ear|Face|Ball|F_|Headband/).test(slot.data.name)) { hidden.push([slot,slot.attachment]); slot.attachment=null; }
+      if (slot.attachment && !(makasha?/^(Hair_|Point_Hair_|Shadow_Hair_|Head_B$|Horn_|Ear$|Face_|Ball_|Eye_|Brow_|Mouth|Tear_)/:sherum?/^(Hair_|Hat_|Horn$|Face_|Ball_|Eye_|E_|Mouth|Tear_)/:youngchun?/^(Hair_|Band_|Face|Ball_|Eye|Mouth|Tear_)/:/Hair|Ear|Face|Ball|F_|Headband/).test(slot.data.name)) { hidden.push([slot,slot.attachment]); slot.attachment=null; }
     }
     try {
       if (peek) {
         const wholeHead = skeleton.getBoundsRect(), face = selectedBounds(faceSlots);
-        // 每帧按实际头部和下巴定界；下巴贴屏幕边，长发沿边裁齐，不留悬空的透明垫片。
-        head = { x:wholeHead.x, y:face.y-4, width:wholeHead.width, height:wholeHead.y+wholeHead.height-face.y+4 };
+        // 玛卡莎斜脸的最低点偏在侧面；向脸内收11%脸高，让下巴中间也贴边。
+        const chin = face.y + (makasha ? face.height*.11 : -4);
+        head = { x:wholeHead.x, y:chin, width:wholeHead.width, height:wholeHead.y+wholeHead.height-chin };
       }
       poseBounds = skeleton.getBoundsRect();
       const full = { x:Math.min(base.x,poseBounds.x), y:Math.min(base.y,poseBounds.y) };
